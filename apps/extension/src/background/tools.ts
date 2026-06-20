@@ -165,7 +165,15 @@ export const TOOLS: LLMTool[] = [
         styles: {
           type: 'object',
           description: 'CSS styles to apply, using camelCase or kebab-case keys. Example: {"color":"red"} or {"backgroundColor":"blue","color":"#fff"}.',
-          additionalProperties: { type: 'string' },
+          properties: {
+            color: { type: 'string', description: 'Text color, e.g. "red" or "#ff0000".' },
+            backgroundColor: { type: 'string', description: 'Background color, e.g. "blue".' },
+            borderColor: { type: 'string', description: 'Border color.' },
+            fontSize: { type: 'string', description: 'Font size, e.g. "18px".' },
+            fontWeight: { type: 'string', description: 'Font weight, e.g. "700" or "bold".' },
+            opacity: { type: 'string', description: 'Opacity, e.g. "0.5".' },
+            display: { type: 'string', description: 'Display value, e.g. "none" or "block".' },
+          },
         },
       },
       required: ['text', 'styles'],
