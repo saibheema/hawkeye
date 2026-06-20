@@ -220,6 +220,43 @@ test('Actions dropdown shows Settings and Record Flows', async ({ context, exten
   await page.close();
 });
 
+test('dashboard portal lists recorded flows and replay controls', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/src/dashboard/index.html`);
+  await page.evaluate(() => chrome.storage.local.set({
+    hawkeye_flows_example_test: [{
+      id: 'flow_dashboard_test',
+      name: 'Dashboard booking flow',
+      domain: 'example.test',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      version: 1,
+      stepCount: 2,
+      steps: [
+        { tool: 'type_text', args: { selector: '#email', text: 'sai@example.test' }, meta: { label: 'Email', dataKind: 'email', originalValue: 'sai@example.test' } },
+        { tool: 'click', args: { selector: '#submit' }, meta: { label: 'Submit' } },
+      ],
+      fields: [{
+        id: 'field_0',
+        stepIndex: 0,
+        selector: '#email',
+        label: 'Email',
+        dataKind: 'email',
+        originalValue: 'sai@example.test',
+        strategy: 'same',
+      }],
+      replayDefaults: { repeatCount: 1, dataMode: 'same', fieldStrategies: { field_0: 'same' } },
+    }],
+  }));
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Personal Automation Portal' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Dashboard booking flow' })).toBeVisible();
+  await expect(page.getByText('Email', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Random', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Run 1x on active tab/ })).toBeVisible();
+  await page.close();
+});
+
 test('records manual form actions and replays same or random data', async ({ context, extensionId }) => {
   test.setTimeout(120_000);
   const html = `<!doctype html>

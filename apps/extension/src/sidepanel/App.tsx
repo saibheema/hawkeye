@@ -71,6 +71,9 @@ export function App() {
   const [panel, setPanel] = useState<Panel>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = React.useRef<HTMLDivElement>(null);
+  const openDashboard = () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/dashboard/index.html') });
+  };
 
   React.useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -94,6 +97,12 @@ export function App() {
           </button>
           {menuOpen && (
             <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, background: C.bg, border: `1px solid ${C.border}`, borderRadius: C.radius, boxShadow: '0 4px 16px rgba(0,0,0,0.13)', zIndex: 999, minWidth: 150, overflow: 'hidden' }}>
+              <button
+                onClick={() => { openDashboard(); setMenuOpen(false); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '9px 14px', background: 'none', border: 'none', textAlign: 'left', fontSize: 13, color: C.text, cursor: 'pointer', fontFamily: C.font }}
+              >
+                <span>▣</span>Dashboard
+              </button>
               {([['flows', '🔄', 'Record Flows'], ['settings', '⚙️', 'Settings']] as [NonNullable<Panel>, string, string][]).map(([p, icon, label]) => (
                 <button key={p} onClick={() => { setPanel(panel === p ? null : p); setMenuOpen(false); }}
                   style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '9px 14px', background: panel === p ? C.accentBg : 'none', border: 'none', textAlign: 'left', fontSize: 13, color: panel === p ? C.accent : C.text, cursor: 'pointer', fontFamily: C.font, fontWeight: panel === p ? 600 : 400 }}
