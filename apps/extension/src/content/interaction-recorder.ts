@@ -28,22 +28,26 @@ let lastScrollAt = 0;
 let lastScrollY = 0;
 
 export function initInteractionRecorder() {
-  chrome.runtime.onMessage.addListener(
-    (message: ExtensionMessage, _sender, sendResponse) => {
-      if (message.type === 'FLOW_RECORD_START') {
-        recording = true;
-        lastScrollY = window.scrollY;
-        sendResponse({ ok: true });
-        return true;
+  try {
+    chrome.runtime.onMessage.addListener(
+      (message: ExtensionMessage, _sender, sendResponse) => {
+        if (message.type === 'FLOW_RECORD_START') {
+          recording = true;
+          lastScrollY = window.scrollY;
+          sendResponse({ ok: true });
+          return true;
+        }
+        if (message.type === 'FLOW_RECORD_STOP') {
+          recording = false;
+          sendResponse({ ok: true });
+          return true;
+        }
+        return false;
       }
-      if (message.type === 'FLOW_RECORD_STOP') {
-        recording = false;
-        sendResponse({ ok: true });
-        return true;
-      }
-      return false;
-    }
-  );
+    );
+  } catch {
+    return;
+  }
 
   document.addEventListener('click', recordClick, true);
   document.addEventListener('change', recordChange, true);
@@ -158,17 +162,25 @@ function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {
 }
 
 function sendStep(tool: string, args: Record<string, unknown>, meta?: Record<string, unknown>) {
-  chrome.runtime.sendMessage(
-    { type: 'FLOW_RECORD_STEP', payload: { tool, args, meta } },
-    () => { void chrome.runtime.lastError; }
-  );
+  try {
+    chrome.runtime.sendMessage(
+      { type: 'FLOW_RECORD_STEP', payload: { tool, args, meta } },
+      () => { void chrome.runtime.lastError; }
+    );
+  } catch {
+    recording = false;
+  }
 }
 
 function sendSteps(steps: RecordedStep[]) {
-  chrome.runtime.sendMessage(
-    { type: 'FLOW_RECORD_STEPS', payload: { steps } },
-    () => { void chrome.runtime.lastError; }
-  );
+  try {
+    chrome.runtime.sendMessage(
+      { type: 'FLOW_RECORD_STEPS', payload: { steps } },
+      () => { void chrome.runtime.lastError; }
+    );
+  } catch {
+    recording = false;
+  }
 }
 
 function labelFor(el: Element): string {

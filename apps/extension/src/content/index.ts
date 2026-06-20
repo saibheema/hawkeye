@@ -13,22 +13,27 @@ initInteractionRecorder();
 const domain = location.hostname;
 if (domain) {
   const key = `hawkeye_css_${domain}`;
-  chrome.storage.local.get(key, (res) => {
-    const rules: string[] = res[key] ?? [];
-    if (rules.length === 0) return;
-    const inject = () => {
-      const style = document.createElement('style');
-      style.setAttribute('data-hawkeye', 'persisted');
-      style.textContent = rules.join('\n');
-      (document.head ?? document.documentElement)?.appendChild(style);
-      console.log(`[Hawkeye] Re-applied ${rules.length} persisted CSS rule(s) on ${domain}`);
-    };
-    if (document.head || document.documentElement) {
-      inject();
-    } else {
-      document.addEventListener('DOMContentLoaded', inject, { once: true });
-    }
-  });
+  try {
+    chrome.storage.local.get(key, (res) => {
+      if (chrome.runtime.lastError) return;
+      const rules: string[] = res[key] ?? [];
+      if (rules.length === 0) return;
+      const inject = () => {
+        const style = document.createElement('style');
+        style.setAttribute('data-hawkeye', 'persisted');
+        style.textContent = rules.join('\n');
+        (document.head ?? document.documentElement)?.appendChild(style);
+        console.log(`[Hawkeye] Re-applied ${rules.length} persisted CSS rule(s) on ${domain}`);
+      };
+      if (document.head || document.documentElement) {
+        inject();
+      } else {
+        document.addEventListener('DOMContentLoaded', inject, { once: true });
+      }
+    });
+  } catch {
+    // Extension was reloaded while this content script was still alive.
+  }
 }
 
 console.log('[Hawkeye] Content script loaded on', location.href);

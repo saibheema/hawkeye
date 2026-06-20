@@ -150,6 +150,14 @@ function ChatPanel() {
     chrome.storage.local.get('gemini_api_key', (res) => {
       if (res.gemini_api_key) setApiKey(res.gemini_api_key);
     });
+
+    const storageListener = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+      if (areaName === 'local' && changes.gemini_api_key) {
+        setApiKey(changes.gemini_api_key.newValue ?? '');
+      }
+    };
+    chrome.storage.onChanged.addListener(storageListener);
+    return () => chrome.storage.onChanged.removeListener(storageListener);
   }, []);
 
   React.useEffect(() => {
@@ -186,10 +194,14 @@ function ChatPanel() {
 
   const send = async () => {
     if (!input.trim() || running) return;
-    if (!apiKey) {
+    const key = apiKey || await new Promise<string>((resolve) => {
+      chrome.storage.local.get('gemini_api_key', (res) => resolve(res.gemini_api_key ?? ''));
+    });
+    if (!key) {
       setMessages(m => [...m, { role: 'agent', text: '⚠️ Add your Gemini API key in Actions → Settings first.', isError: true }]);
       return;
     }
+    if (key !== apiKey) setApiKey(key);
     const task = input.trim();
     setInput('');
     setRunning(true);
@@ -202,7 +214,7 @@ function ChatPanel() {
       setMessages(m => [...m, { role: 'agent', text: '❌ No active tab found.', isError: true }]);
       return;
     }
-    chrome.runtime.sendMessage({ type: 'AGENT_RUN', tabId: tab.id, payload: { task, apiKey, provider: 'gemini' } });
+    chrome.runtime.sendMessage({ type: 'AGENT_RUN', tabId: tab.id, payload: { task, apiKey: key, provider: 'gemini' } });
   };
 
   return (
@@ -549,6 +561,12 @@ function UIModsPanel() {
 
   React.useEffect(() => {
     chrome.storage.local.get('gemini_api_key', (r) => { if (r.gemini_api_key) setApiKey(r.gemini_api_key); });
+    const storageListener = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+      if (areaName === 'local' && changes.gemini_api_key) {
+        setApiKey(changes.gemini_api_key.newValue ?? '');
+      }
+    };
+    chrome.storage.onChanged.addListener(storageListener);
     chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
       if (tab?.url) {
         const d = new URL(tab.url).hostname;
@@ -558,12 +576,21 @@ function UIModsPanel() {
         });
       }
     });
+    return () => chrome.storage.onChanged.removeListener(storageListener);
   }, []);
 
   const applyChange = async () => {
     if (!input.trim() || applying) return;
     setApplying(true);
     setStatus('');
+    const key = apiKey || await new Promise<string>((resolve) => {
+      chrome.storage.local.get('gemini_api_key', (r) => resolve(r.gemini_api_key ?? ''));
+    });
+    if (!key) {
+      setApplying(false);
+      return;
+    }
+    if (key !== apiKey) setApiKey(key);
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) { setApplying(false); return; }
 
@@ -573,7 +600,7 @@ function UIModsPanel() {
       tabId: tab.id,
       payload: {
         task: `Apply this UI change to the current page using insert_css: ${input}. Use a single insert_css call with valid CSS rules. Keep it simple.`,
-        apiKey,
+        apiKey: key,
         provider: 'gemini',
       },
     });
