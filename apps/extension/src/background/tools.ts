@@ -724,6 +724,42 @@ export async function executeTool(
         return { ok: true, data: { replaced } };
       }
 
+      case 'style_by_text': {
+        type StyleByTextArgs = { text: string; styles: Record<string, string> };
+        const a = args as unknown as StyleByTextArgs;
+        const res = await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          world: 'MAIN',
+          func: (o: StyleByTextArgs) => {
+            const needle = o.text.trim().toLowerCase();
+            if (!needle) return { ok: true as const, count: 0 };
+            const candidates = Array.from(document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"]')) as HTMLElement[];
+            let count = 0;
+            for (const el of candidates) {
+              const label = [
+                el.innerText,
+                el.textContent,
+                el.getAttribute('aria-label'),
+                el.getAttribute('title'),
+                (el as HTMLInputElement).value,
+              ].filter(Boolean).join(' ').trim().toLowerCase();
+              if (!label.includes(needle)) continue;
+              for (const [property, value] of Object.entries(o.styles)) {
+                const prop = property.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+                (el.style as any)[prop] = value;
+              }
+              count++;
+            }
+            return { ok: true as const, count };
+          },
+          args: [a],
+        });
+        const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        return { ok: true, data: { affected } };
+      }
+
       case 'set_css_var': {
         type SetCssVarArgs = { variable: string; value: string; selector?: string };
         const a = args as unknown as SetCssVarArgs;

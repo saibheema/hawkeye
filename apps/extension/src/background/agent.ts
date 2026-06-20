@@ -104,14 +104,40 @@ function parseDirectTextReplacement(message: string): { find: string; replace: s
 
   if (!match) return null;
 
-  const find = match[1].trim()
-    .replace(/^["'`]+|["'`]+$/g, '')
-    .replace(/\s+(?:label|text|copy|wording)$/i, '')
-    .trim();
+  const find = cleanTargetText(match[1]);
   const replace = match[2].trim().replace(/^["'`]+|["'`]+$/g, '');
   if (!find || !replace || find.length > 200 || replace.length > 500) return null;
 
   return { find, replace };
+}
+
+function parseDirectStyleChange(message: string): { text: string; color: string } | null {
+  const normalized = message
+    .trim()
+    .replace(/^[\s"'`]*(?:can you|please|pls)\s+/i, '')
+    .replace(/\s+please[?.!]?$/i, '');
+
+  const match = normalized.match(/^(?:change|make|set)\s+(.+?)\s+(?:button\s+)?(?:colou?r|background(?:\s+colou?r)?)\s+(?:to\s+)?(.+?)$/i);
+  if (!match) return null;
+
+  const text = cleanTargetText(match[1]);
+  const color = match[2].trim().replace(/^["'`]+|["'`]+$/g, '');
+  if (!text || !color || text.length > 200 || color.length > 100) return null;
+
+  return { text, color };
+}
+
+function cleanTargetText(value: string): string {
+  let cleaned = value.trim().replace(/^["'`]+|["'`]+$/g, '');
+  let previous = '';
+  while (cleaned !== previous) {
+    previous = cleaned;
+    cleaned = cleaned
+      .replace(/\s+(?:button|link|field|input|label|text|copy|wording)$/i, '')
+      .replace(/\s+(?:button|link|field|input)\s+(?:label|text|copy|wording)$/i, '')
+      .trim();
+  }
+  return cleaned;
 }
 
 export async function runAgent(
@@ -121,6 +147,45 @@ export async function runAgent(
   onStep: StepCallback,
   permissionGate: (action: string, args: Record<string, unknown>) => Promise<boolean>
 ): Promise<string> {
+  const directStyleChange = parseDirectStyleChange(userMessage);
+  if (directStyleChange) {
+    const args = {
+      text: directStyleChange.text,
+      styles: {
+        backgroundColor: directStyleChange.color,
+        borderColor: directStyleChange.color,
+        color: '#fff',
+      },
+    };
+    onStep({
+      type: 'tool_call',
+      content: 'Calling style_by_text',
+      tool: 'style_by_text',
+      args,
+    });
+
+    const result = await executeTool('style_by_text', args, tabId);
+    onStep({
+      type: 'tool_result',
+      content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+      tool: 'style_by_text',
+      result: result.data ?? result.error,
+    });
+
+    if (!result.ok) {
+      const answer = `I could not change the button color: ${result.error}`;
+      onStep({ type: 'answer', content: answer });
+      return answer;
+    }
+
+    const affected = (result.data as { affected?: number } | undefined)?.affected ?? 0;
+    const answer = affected > 0
+      ? `Changed the "${directStyleChange.text}" button color to ${directStyleChange.color}.`
+      : `I could not find a button matching "${directStyleChange.text}".`;
+    onStep({ type: 'answer', content: answer });
+    return answer;
+  }
+
   const directReplacement = parseDirectTextReplacement(userMessage);
   if (directReplacement) {
     onStep({
