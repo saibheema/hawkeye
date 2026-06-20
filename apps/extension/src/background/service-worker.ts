@@ -235,8 +235,13 @@ async function handleMessage(
       }
 
       case 'FLOW_SAVE': {
-        const { name, domain, steps } = message.payload as { name: string; domain: string; steps: any[] };
-        const flow = await saveFlow(name, domain, steps);
+        const { name, domain, steps, replayDefaults } = message.payload as {
+          name: string;
+          domain: string;
+          steps: any[];
+          replayDefaults?: any;
+        };
+        const flow = await saveFlow(name, domain, steps, replayDefaults);
         sendResponse({ ok: true, flow });
         break;
       }
@@ -257,11 +262,16 @@ async function handleMessage(
 
       case 'FLOW_REPLAY': {
         if (!tabId) { sendResponse({ error: 'no tab' }); break; }
-        const { flow, repeatCount, dataMode } = message.payload as { flow: any; repeatCount: number; dataMode?: 'same' | 'random' };
+        const { flow, repeatCount, dataMode, fieldStrategies } = message.payload as {
+          flow: any;
+          repeatCount: number;
+          dataMode?: 'same' | 'random';
+          fieldStrategies?: Record<string, 'same' | 'random'>;
+        };
         sendResponse({ ok: true, started: true });
         replayFlow(flow, tabId, repeatCount, dataMode ?? 'same', (event) => {
           chrome.runtime.sendMessage({ type: 'FLOW_REPLAY_EVENT', payload: event }).catch(() => {});
-        }).catch((err) => {
+        }, fieldStrategies).catch((err) => {
           chrome.runtime.sendMessage({ type: 'FLOW_REPLAY_EVENT', payload: { type: 'all_done', error: err.message } }).catch(() => {});
         });
         break;

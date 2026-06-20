@@ -58,9 +58,16 @@ async function sendExtensionMessage(extensionPage: any, message: any): Promise<a
   }), message);
 }
 
-async function replayFlow(extensionPage: any, tabId: number, flow: any, repeatCount: number, dataMode: 'same' | 'random'): Promise<any[]> {
+async function replayFlow(
+  extensionPage: any,
+  tabId: number,
+  flow: any,
+  repeatCount: number,
+  dataMode: 'same' | 'random',
+  fieldStrategies?: Record<string, 'same' | 'random'>
+): Promise<any[]> {
   return extensionPage.evaluate(
-    ({ tabId: targetTabId, flow: targetFlow, repeatCount: runs, dataMode: mode }) => new Promise<any[]>((resolve, reject) => {
+    ({ tabId: targetTabId, flow: targetFlow, repeatCount: runs, dataMode: mode, fieldStrategies: strategies }) => new Promise<any[]>((resolve, reject) => {
       const timeoutMs = Math.max(30_000, runs * (targetFlow.steps.length * 1_000 + 3_000));
       const timer = setTimeout(() => {
         chrome.runtime.onMessage.removeListener(listener);
@@ -80,7 +87,7 @@ async function replayFlow(extensionPage: any, tabId: number, flow: any, repeatCo
       chrome.runtime.sendMessage({
         type: 'FLOW_REPLAY',
         tabId: targetTabId,
-        payload: { flow: targetFlow, repeatCount: runs, dataMode: mode },
+        payload: { flow: targetFlow, repeatCount: runs, dataMode: mode, fieldStrategies: strategies },
       }, (res) => {
         if (res?.error) {
           clearTimeout(timer);
@@ -89,7 +96,7 @@ async function replayFlow(extensionPage: any, tabId: number, flow: any, repeatCo
         }
       });
     }),
-    { tabId, flow, repeatCount, dataMode }
+    { tabId, flow, repeatCount, dataMode, fieldStrategies }
   );
 }
 
@@ -290,6 +297,35 @@ test('records manual form actions and replays same or random data', async ({ con
       expect(submit.phone).toMatch(/^\(555\) \d{3}-\d{4}$/);
       expect(submit.service).toBe('oil');
     }
+
+    const saved = await sendExtensionMessage(extensionPage, {
+      type: 'FLOW_SAVE',
+      payload: {
+        name: 'Booking test saved',
+        domain: '127.0.0.1',
+        steps,
+        replayDefaults: { repeatCount: 2, dataMode: 'same', fieldStrategies: {} },
+      },
+    });
+    expect(saved.flow?.version).toBe(1);
+    expect(saved.flow?.fields?.some((f: any) => f.dataKind === 'email')).toBe(true);
+    expect(saved.flow?.fields?.some((f: any) => f.originalValue === 'Sam')).toBe(true);
+
+    const emailField = saved.flow.fields.find((f: any) => f.dataKind === 'email');
+    expect(emailField?.id).toBeTruthy();
+
+    await target.evaluate(() => { (window as any).__submits = []; });
+    const customResults = await replayFlow(extensionPage, tabId, saved.flow, 2, 'same', {
+      [emailField.id]: 'random',
+    });
+    expect(customResults).toHaveLength(2);
+    expect(customResults.every((r) => r.ok)).toBe(true);
+    const customSubmits = await target.evaluate(() => (window as any).__submits);
+    expect(customSubmits).toHaveLength(2);
+    expect(customSubmits.every((s: any) => s.firstName === 'Sam')).toBe(true);
+    expect(customSubmits.every((s: any) => s.lastName === 'Tester')).toBe(true);
+    expect(new Set(customSubmits.map((s: any) => s.email)).size).toBe(2);
+    expect(customSubmits.every((s: any) => /@testmail\.com$/.test(s.email))).toBe(true);
 
     await extensionPage.close();
     await target.close();

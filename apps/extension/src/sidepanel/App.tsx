@@ -298,6 +298,51 @@ function ChatPanel() {
 // ─── Flows Panel ─────────────────────────────────────────────────────────────
 
 type ReplayEvent = { type: string; runIndex: number; total: number; stepIndex?: number; stepTool?: string; result?: any; results?: any[] };
+type FieldStrategy = 'same' | 'random';
+type FlowField = {
+  id: string;
+  stepIndex: number;
+  selector: string;
+  label: string;
+  dataKind: string;
+  originalValue: string;
+  strategy?: FieldStrategy;
+  frameId?: number;
+  frameUrl?: string;
+};
+
+function fieldId(stepIndex: number) {
+  return `field_${stepIndex}`;
+}
+
+function inferFieldKind(value: string) {
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return 'email';
+  if (/\d{3}.*\d{3}.*\d{4}/.test(value)) return 'phone';
+  if (/^\d{5}(-\d{4})?$/.test(value)) return 'zip';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'date';
+  if (/^\d{1,2}:\d{2}/.test(value)) return 'time';
+  if (/^[a-z]+ [a-z]+$/i.test(value)) return 'name';
+  return 'text';
+}
+
+function fieldsForFlow(flow: any): FlowField[] {
+  if (Array.isArray(flow.fields) && flow.fields.length > 0) return flow.fields;
+  return (flow.steps ?? []).flatMap((step: any, stepIndex: number) => {
+    if (step.tool !== 'type_text') return [];
+    const originalValue = String(step.args?.text ?? step.meta?.originalValue ?? '');
+    return [{
+      id: fieldId(stepIndex),
+      stepIndex,
+      selector: String(step.args?.selector ?? ''),
+      label: String(step.meta?.label ?? step.args?.selector ?? `Field ${stepIndex + 1}`),
+      dataKind: String(step.meta?.dataKind ?? inferFieldKind(originalValue)),
+      originalValue,
+      strategy: 'same',
+      frameId: typeof step.args?.frameId === 'number' ? step.args.frameId : undefined,
+      frameUrl: typeof step.args?.frameUrl === 'string' ? step.args.frameUrl : undefined,
+    }];
+  });
+}
 
 function FlowsPanel() {
   const [recording, setRecording] = useState(false);
@@ -308,10 +353,22 @@ function FlowsPanel() {
   const [flows, setFlows] = useState<any[]>([]);
   const [domain, setDomain] = useState('');
   const [replayCount, setReplayCount] = useState(1);
-  const [dataMode, setDataMode] = useState<'same' | 'random'>('same');
+  const [dataMode, setDataMode] = useState<FieldStrategy>('same');
+  const [selectedFlowId, setSelectedFlowId] = useState<string | null>(null);
+  const [fieldStrategies, setFieldStrategies] = useState<Record<string, Record<string, FieldStrategy>>>({});
   const [replaying, setReplaying] = useState<string | null>(null); // flowId
   const [replayLog, setReplayLog] = useState<ReplayEvent[]>([]);
   const logRef = React.useRef<HTMLDivElement>(null);
+  const selectedFlow = flows.find((flow) => flow.id === selectedFlowId) ?? flows[0] ?? null;
+  const selectedFields = selectedFlow ? fieldsForFlow(selectedFlow) : [];
+  const selectedStrategies = selectedFlow
+    ? {
+      ...Object.fromEntries(selectedFields.map((field) => [field.id, field.strategy ?? selectedFlow.replayDefaults?.dataMode ?? 'same'])),
+      ...(selectedFlow.replayDefaults?.fieldStrategies ?? {}),
+      ...(fieldStrategies[selectedFlow.id] ?? {}),
+    }
+    : {};
+  const latestDone = replayLog.findLast?.((event) => event.type === 'all_done') ?? [...replayLog].reverse().find((event) => event.type === 'all_done');
 
   // Load domain + flows on mount
   React.useEffect(() => {
@@ -320,7 +377,10 @@ function FlowsPanel() {
         const d = new URL(tab.url).hostname;
         setDomain(d);
         chrome.runtime.sendMessage({ type: 'FLOW_LIST', payload: { domain: d } }, (res) => {
-          if (res?.flows) setFlows(res.flows);
+          if (res?.flows) {
+            setFlows(res.flows);
+            if (res.flows[0]?.id) setSelectedFlowId(res.flows[0].id);
+          }
         });
       }
     });
@@ -366,11 +426,20 @@ function FlowsPanel() {
     if (!saveName.trim() || recordedSteps.length === 0) return;
     setSaving(true);
     chrome.runtime.sendMessage(
-      { type: 'FLOW_SAVE', payload: { name: saveName.trim(), domain, steps: recordedSteps } },
+      {
+        type: 'FLOW_SAVE',
+        payload: {
+          name: saveName.trim(),
+          domain,
+          steps: recordedSteps,
+          replayDefaults: { repeatCount: 1, dataMode: 'same', fieldStrategies: {} },
+        },
+      },
       (res) => {
         setSaving(false);
         if (res?.flow) {
           setFlows((f) => [...f, res.flow]);
+          setSelectedFlowId(res.flow.id);
           setRecordedSteps([]);
           setRecordedStepCount(0);
           setSaveName('');
@@ -382,6 +451,7 @@ function FlowsPanel() {
   const deleteFlow = (flowId: string) => {
     chrome.runtime.sendMessage({ type: 'FLOW_DELETE', payload: { domain, flowId } }, () => {
       setFlows((f) => f.filter((fl) => fl.id !== flowId));
+      if (selectedFlowId === flowId) setSelectedFlowId(null);
     });
   };
 
@@ -390,10 +460,16 @@ function FlowsPanel() {
     if (!tab?.id) return;
     setReplaying(flow.id);
     setReplayLog([]);
+    const fields = fieldsForFlow(flow);
+    const strategies = {
+      ...Object.fromEntries(fields.map((field) => [field.id, dataMode])),
+      ...(flow.replayDefaults?.fieldStrategies ?? {}),
+      ...(fieldStrategies[flow.id] ?? {}),
+    };
     chrome.runtime.sendMessage({
       type: 'FLOW_REPLAY',
       tabId: tab.id,
-      payload: { flow, repeatCount: replayCount, dataMode },
+      payload: { flow, repeatCount: replayCount, dataMode, fieldStrategies: strategies },
     });
   };
 
@@ -401,28 +477,52 @@ function FlowsPanel() {
     <span style={{ background: bg, color, borderRadius: 10, padding: '1px 7px', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap' }}>{text}</span>
   );
 
+  const setFieldStrategy = (flowId: string, id: string, strategy: FieldStrategy) => {
+    setFieldStrategies((prev) => ({ ...prev, [flowId]: { ...(prev[flowId] ?? {}), [id]: strategy } }));
+  };
+
+  const setAllFieldStrategies = (flow: any, strategy: FieldStrategy) => {
+    setDataMode(strategy);
+    setFieldStrategies((prev) => ({
+      ...prev,
+      [flow.id]: Object.fromEntries(fieldsForFlow(flow).map((field) => [field.id, strategy])),
+    }));
+  };
+
   return (
-    <div style={{ padding: 14, fontFamily: C.font, display: 'flex', flexDirection: 'column', gap: 14, width: '100%', boxSizing: 'border-box' }}>
+    <div style={{ padding: 12, fontFamily: C.font, display: 'flex', flexDirection: 'column', gap: 12, width: '100%', boxSizing: 'border-box' }}>
 
       {/* ── Record Section ── */}
-      <div style={{ border: `1px solid ${recording ? C.red : C.border}`, borderRadius: C.radius, overflow: 'hidden' }}>
-        <div style={{ padding: '8px 12px', background: recording ? '#fff5f5' : C.bgSubtle, display: 'flex', alignItems: 'center', gap: 8, borderBottom: `1px solid ${recording ? '#ffd6d6' : C.borderLight}` }}>
-            {recording && <span style={{ width: 8, height: 8, background: C.red, borderRadius: '50%', display: 'inline-block', flexShrink: 0 }} />}
-          <span style={{ fontSize: 12, fontWeight: 600, color: C.text, flex: 1 }}>
-            {recording ? `Recording… ${recordedStepCount} step${recordedStepCount !== 1 ? 's' : ''}` : 'Record a Flow'}
+      <div style={{ border: `1px solid ${recording ? '#f4b5ad' : C.border}`, borderRadius: C.radius, overflow: 'hidden', background: C.bg }}>
+        <div style={{ padding: '10px 12px', background: recording ? '#fff7f6' : C.bgSubtle, display: 'flex', alignItems: 'center', gap: 10, borderBottom: `1px solid ${recording ? '#fad2cf' : C.borderLight}` }}>
+          <span style={{ width: 28, height: 28, borderRadius: 14, background: recording ? '#fce8e6' : C.accentBg, color: recording ? C.red : C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700 }}>
+            {recording ? '●' : 'REC'}
           </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+              {recording ? 'Recording flow' : 'Capture a customer journey'}
+            </div>
+            <div style={{ fontSize: 11, color: C.textSecond, marginTop: 1 }}>
+              {recording ? `${recordedStepCount} captured step${recordedStepCount !== 1 ? 's' : ''}` : 'Clicks, fields, iframe actions, and agent tools become replayable JSON.'}
+            </div>
+          </div>
           <button
             onClick={toggleRecord}
-            style={{ background: recording ? C.red : C.accent, border: 'none', borderRadius: C.radiusSm, padding: '4px 10px', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: C.font }}
+            style={{ background: recording ? C.red : C.accent, border: 'none', borderRadius: C.radiusSm, padding: '6px 11px', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: C.font }}
           >
-            {recording ? '⏹ Stop' : '⏺ Record'}
+            {recording ? 'Stop' : 'Record'}
           </button>
         </div>
         {!recording && recordedSteps.length > 0 && (
           <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: 11, color: C.textSecond }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {pill(`${recordedStepCount} steps`, C.accent, C.accentBg)}
+              {pill(`${recordedSteps.filter((s) => s.tool === 'type_text').length} fields`, C.green, '#e6f4ea')}
+              {recordedSteps.some((s) => s.args?.frameId) && pill('iframe ready', C.yellow, '#fef7e0')}
+            </div>
+            <div style={{ fontSize: 11, color: C.textSecond, maxHeight: 118, overflowY: 'auto', border: `1px solid ${C.borderLight}`, borderRadius: C.radiusSm, background: C.bgSubtle }}>
               {recordedSteps.map((s, i) => (
-                <div key={i} style={{ padding: '3px 0', borderBottom: i < recordedSteps.length - 1 ? `1px solid ${C.borderLight}` : 'none', display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div key={i} style={{ padding: '5px 8px', borderBottom: i < recordedSteps.length - 1 ? `1px solid ${C.borderLight}` : 'none', display: 'flex', gap: 6, alignItems: 'center' }}>
                   <span style={{ color: C.textMuted, fontFamily: C.fontMono, minWidth: 16 }}>{i + 1}.</span>
                   {pill(s.tool, C.accent, C.accentBg)}
                   <span style={{ color: C.textSecond, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: C.fontMono, fontSize: 10 }}>
@@ -456,74 +556,157 @@ function FlowsPanel() {
         )}
         {recording && (
           <div style={{ padding: '8px 12px', fontSize: 11, color: C.textSecond }}>
-            Perform the task on the page or ask Hawkeye in Chat. Clicks, field values, and agent tool calls will be recorded.
+            Complete the workflow on the page or ask Hawkeye in Chat. Stop before any real-world final booking/submission you do not want to create.
           </div>
         )}
       </div>
 
       {/* ── Saved Flows ── */}
       {flows.length > 0 && (
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 600, color: C.textSecond, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Saved Flows — {domain}
-          </div>
-
-          {/* Replay controls */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: C.textSecond }}>Runs:</span>
-            {[1, 3, 5, 10].map((n) => (
-              <button
-                key={n}
-                onClick={() => setReplayCount(n)}
-                style={{ background: replayCount === n ? C.accent : C.bgHover, border: `1px solid ${replayCount === n ? C.accent : C.border}`, borderRadius: C.radiusSm, padding: '3px 10px', color: replayCount === n ? '#fff' : C.textSecond, fontSize: 12, fontWeight: replayCount === n ? 600 : 400, cursor: 'pointer', fontFamily: C.font }}
-              >
-                {n}×
-              </button>
-            ))}
-            <span style={{ width: 1, alignSelf: 'stretch', background: C.borderLight, margin: '0 2px' }} />
-            {(['same', 'random'] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setDataMode(mode)}
-                style={{ background: dataMode === mode ? C.accent : C.bgHover, border: `1px solid ${dataMode === mode ? C.accent : C.border}`, borderRadius: C.radiusSm, padding: '3px 10px', color: dataMode === mode ? '#fff' : C.textSecond, fontSize: 12, fontWeight: dataMode === mode ? 600 : 400, cursor: 'pointer', fontFamily: C.font }}
-              >
-                {mode === 'same' ? 'Same data' : 'Random data'}
-              </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+            {[
+              ['Flows', flows.length],
+              ['Fields', flows.reduce((sum, flow) => sum + fieldsForFlow(flow).length, 0)],
+              ['Domain', domain || '-'],
+            ].map(([label, value]) => (
+              <div key={label} style={{ border: `1px solid ${C.borderLight}`, borderRadius: C.radiusSm, padding: '7px 8px', background: C.bg }}>
+                <div style={{ fontSize: 10, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
+                <div style={{ fontSize: 13, color: C.text, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</div>
+              </div>
             ))}
           </div>
 
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textSecond, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            Flow Library
+          </div>
           {flows.map((flow) => (
-            <div key={flow.id} style={{ border: `1px solid ${C.border}`, borderRadius: C.radius, marginBottom: 8, overflow: 'hidden' }}>
-              <div style={{ padding: '8px 12px', background: C.bgSubtle, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: C.text, flex: 1 }}>{flow.name}</span>
-                {pill(`${flow.stepCount} steps`, C.textSecond, C.bgHover)}
+            <div
+              key={flow.id}
+              onClick={() => setSelectedFlowId(flow.id)}
+              style={{ border: `1px solid ${selectedFlow?.id === flow.id ? C.accent : C.border}`, borderRadius: C.radius, overflow: 'hidden', background: selectedFlow?.id === flow.id ? '#fbfdff' : C.bg, cursor: 'pointer' }}
+            >
+              <div style={{ padding: '9px 11px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{flow.name}</div>
+                  <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>
+                    {new Date(flow.createdAt).toLocaleDateString()} · {flow.stepCount} steps · {fieldsForFlow(flow).length} fields
+                  </div>
+                </div>
+                {flow.version && pill(`v${flow.version}`, C.textSecond, C.bgHover)}
                 <button
                   onClick={() => startReplay(flow)}
                   disabled={replaying === flow.id}
-                  style={{ background: replaying === flow.id ? C.bgHover : C.green, border: 'none', borderRadius: C.radiusSm, padding: '4px 10px', color: replaying === flow.id ? C.textSecond : '#fff', fontSize: 11, fontWeight: 600, cursor: replaying === flow.id ? 'not-allowed' : 'pointer', fontFamily: C.font }}
+                  style={{ background: replaying === flow.id ? C.bgHover : C.green, border: 'none', borderRadius: C.radiusSm, padding: '5px 10px', color: replaying === flow.id ? C.textSecond : '#fff', fontSize: 11, fontWeight: 700, cursor: replaying === flow.id ? 'not-allowed' : 'pointer', fontFamily: C.font }}
                 >
-                  {replaying === flow.id ? '⏳' : `▶ Run ${replayCount}×`}
+                  {replaying === flow.id ? 'Running' : `Run ${replayCount}x`}
                 </button>
                 <button
-                  onClick={() => deleteFlow(flow.id)}
+                  onClick={(e) => { e.stopPropagation(); deleteFlow(flow.id); }}
                   style={{ background: 'none', border: 'none', color: C.textMuted, cursor: 'pointer', fontSize: 14, padding: '0 2px' }}
                   title="Delete flow"
                 >
                   ×
                 </button>
               </div>
-              <div style={{ padding: '4px 12px 6px', fontSize: 11, color: C.textSecond }}>
-                {new Date(flow.createdAt).toLocaleDateString()} · {flow.domain}
-              </div>
             </div>
           ))}
+
+          {selectedFlow && (
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: C.radius, overflow: 'hidden', background: C.bg }}>
+              <div style={{ padding: '9px 11px', background: C.bgSubtle, borderBottom: `1px solid ${C.borderLight}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>Replay Settings</div>
+                  <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{selectedFlow.name}</div>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textSecond }}>
+                  Runs
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={replayCount}
+                    onChange={(e) => setReplayCount(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
+                    style={{ width: 58, border: `1px solid ${C.border}`, borderRadius: C.radiusSm, padding: '4px 6px', fontSize: 12, color: C.text, fontFamily: C.font }}
+                  />
+                </label>
+              </div>
+
+              <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 11, color: C.textSecond, fontWeight: 600 }}>Data strategy</span>
+                  {(['same', 'random'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => setAllFieldStrategies(selectedFlow, mode)}
+                      style={{ background: dataMode === mode ? C.accent : C.bgHover, border: `1px solid ${dataMode === mode ? C.accent : C.border}`, borderRadius: C.radiusSm, padding: '4px 9px', color: dataMode === mode ? '#fff' : C.textSecond, fontSize: 11, fontWeight: dataMode === mode ? 700 : 500, cursor: 'pointer', fontFamily: C.font }}
+                    >
+                      {mode === 'same' ? 'All same' : 'All random'}
+                    </button>
+                  ))}
+                </div>
+
+                {selectedFields.length > 0 ? (
+                  <div style={{ border: `1px solid ${C.borderLight}`, borderRadius: C.radiusSm, overflow: 'hidden' }}>
+                    {selectedFields.map((field, i) => {
+                      const strategy = selectedStrategies[field.id] ?? 'same';
+                      return (
+                        <div key={field.id} style={{ padding: '8px 9px', borderBottom: i < selectedFields.length - 1 ? `1px solid ${C.borderLight}` : 'none', display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center', background: strategy === 'random' ? '#fbfdff' : C.bg }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                              <span style={{ fontSize: 12, color: C.text, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{field.label}</span>
+                              {pill(field.dataKind, C.textSecond, C.bgHover)}
+                              {field.frameId !== undefined && pill('iframe', C.yellow, '#fef7e0')}
+                            </div>
+                            <div style={{ marginTop: 3, fontFamily: C.fontMono, color: C.textMuted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {field.originalValue || field.selector}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', border: `1px solid ${C.border}`, borderRadius: C.radiusSm, overflow: 'hidden' }}>
+                            {(['same', 'random'] as const).map((mode) => (
+                              <button
+                                key={mode}
+                                onClick={() => setFieldStrategy(selectedFlow.id, field.id, mode)}
+                                style={{ border: 'none', borderRight: mode === 'same' ? `1px solid ${C.border}` : 'none', background: strategy === mode ? C.accent : C.bg, color: strategy === mode ? '#fff' : C.textSecond, padding: '4px 7px', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: C.font }}
+                              >
+                                {mode}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: C.textMuted, border: `1px solid ${C.borderLight}`, borderRadius: C.radiusSm, padding: 8 }}>
+                    This flow has no typed fields. Replay will repeat clicks, selections, navigation, and DOM actions.
+                  </div>
+                )}
+
+                <details style={{ border: `1px solid ${C.borderLight}`, borderRadius: C.radiusSm, padding: '7px 8px', background: C.bgSubtle }}>
+                  <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 700, color: C.textSecond }}>Stored JSON</summary>
+                  <pre style={{ margin: '8px 0 0', maxHeight: 150, overflow: 'auto', fontFamily: C.fontMono, fontSize: 10, color: C.textSecond, whiteSpace: 'pre-wrap' }}>
+                    {JSON.stringify({
+                      id: selectedFlow.id,
+                      name: selectedFlow.name,
+                      domain: selectedFlow.domain,
+                      version: selectedFlow.version ?? 0,
+                      stepCount: selectedFlow.stepCount,
+                      fields: selectedFields.map((field) => ({ ...field, strategy: selectedStrategies[field.id] ?? 'same' })),
+                      replayDefaults: { repeatCount: replayCount, dataMode, fieldStrategies: selectedStrategies },
+                    }, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {flows.length === 0 && !recording && recordedSteps.length === 0 && (
         <div style={{ textAlign: 'center', color: C.textMuted, fontSize: 12, paddingTop: 12 }}>
           <div style={{ fontSize: 28, marginBottom: 6 }}>🔄</div>
-          No flows saved yet.<br />Hit Record, run a task in Chat, then save it.
+          No flows saved yet.<br />Record a task, stop, then save it as a reusable test.
         </div>
       )}
 
@@ -553,13 +736,12 @@ function FlowsPanel() {
                 )}
               </div>
             ))}
-            {replayLog.find((e) => e.type === 'all_done') && (
+            {latestDone && (
               <div style={{ padding: '6px 12px', fontSize: 11, fontWeight: 600, color: C.text }}>
                 {(() => {
-                  const done = replayLog.find((e) => e.type === 'all_done');
-                  const passed = (done?.results ?? []).filter((r: any) => r.ok).length;
-                  const total  = (done?.results ?? []).length;
-                  return `✅ ${passed}/${total} passed`;
+                  const passed = (latestDone?.results ?? []).filter((r: any) => r.ok).length;
+                  const total  = (latestDone?.results ?? []).length;
+                  return `${passed}/${total} passed`;
                 })()}
               </div>
             )}

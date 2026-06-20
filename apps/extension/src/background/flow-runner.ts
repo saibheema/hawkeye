@@ -3,7 +3,7 @@
  */
 
 import { executeTool } from './tools.js';
-import type { Flow, FlowStep } from './flow-recorder.js';
+import type { Flow, FlowFieldStrategy, FlowStep } from './flow-recorder.js';
 
 // ─── Test data generator ──────────────────────────────────────────────────────
 
@@ -86,6 +86,30 @@ function randomizeArgs(step: FlowStep, data: TestData): Record<string, unknown> 
   return { ...args, text: data[inferred] ?? data.text };
 }
 
+function argsForStep(
+  flow: Flow,
+  step: FlowStep,
+  stepIndex: number,
+  data: TestData,
+  dataMode: FlowFieldStrategy,
+  fieldStrategies?: Record<string, FlowFieldStrategy>
+): Record<string, unknown> {
+  const fieldId = `field_${stepIndex}`;
+  let strategy = fieldStrategies?.[fieldId] ?? dataMode;
+  const field = flow.fields?.find((candidate) => candidate.stepIndex === stepIndex);
+  if (field && strategy !== 'random') {
+    const sibling = flow.fields?.find((candidate) => {
+      if (candidate.id === field.id) return false;
+      const sameSelector = candidate.selector && candidate.selector === field.selector;
+      const sameKindAndValue = candidate.dataKind === field.dataKind && candidate.originalValue === field.originalValue;
+      return (sameSelector || sameKindAndValue) && fieldStrategies?.[candidate.id] === 'random';
+    });
+    if (sibling) strategy = 'random';
+  }
+  if (strategy === 'random') return randomizeArgs(step, data);
+  return substituteArgs(step.args, data);
+}
+
 function inferKindFromValue(value: string): keyof TestData {
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return 'email';
   if (/\d{3}.*\d{3}.*\d{4}/.test(value)) return 'phone';
@@ -123,9 +147,11 @@ export async function replayFlow(
   tabId: number,
   repeatCount: number,
   dataMode: 'same' | 'random',
-  onProgress: ReplayProgressFn
+  onProgress: ReplayProgressFn,
+  fieldStrategies?: Record<string, FlowFieldStrategy>
 ): Promise<RunResult[]> {
   const results: RunResult[] = [];
+  const effectiveStrategies = fieldStrategies ?? flow.replayDefaults?.fieldStrategies;
 
   for (let run = 0; run < repeatCount; run++) {
     const testData = generateTestData(run);
@@ -140,9 +166,7 @@ export async function replayFlow(
 
     for (let si = 0; si < flow.steps.length; si++) {
       const step: FlowStep = flow.steps[si];
-      const args = dataMode === 'random'
-        ? randomizeArgs(step, testData)
-        : { ...step.args };
+      const args = argsForStep(flow, step, si, testData, dataMode, effectiveStrategies);
 
       onProgress({ type: 'step', runIndex: run, total: repeatCount, stepIndex: si, stepTool: step.tool });
 
