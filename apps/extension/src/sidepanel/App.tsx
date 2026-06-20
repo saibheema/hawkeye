@@ -24,7 +24,16 @@ const C = {
   radiusSm:    4,
 };
 
-type Panel = 'settings' | 'flows' | null;
+type Panel = 'mods' | 'settings' | 'flows' | null;
+
+function isPageTab(tab: chrome.tabs.Tab): boolean {
+  return /^(https?:|file:)/.test(tab.url ?? '');
+}
+
+async function getCurrentPageTab(): Promise<chrome.tabs.Tab | undefined> {
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  return tabs.find((tab) => tab.active && isPageTab(tab)) ?? tabs.find(isPageTab);
+}
 
 // ─── Reset Button ─────────────────────────────────────────────────────────────
 function ResetButton() {
@@ -103,7 +112,7 @@ export function App() {
               >
                 <span>▣</span>Dashboard
               </button>
-              {([['flows', '🔄', 'Record Flows'], ['settings', '⚙️', 'Settings']] as [NonNullable<Panel>, string, string][]).map(([p, icon, label]) => (
+              {([['mods', '🎯', 'UI Mods'], ['flows', '🔄', 'Record Flows'], ['settings', '⚙️', 'Settings']] as [NonNullable<Panel>, string, string][]).map(([p, icon, label]) => (
                 <button key={p} onClick={() => { setPanel(panel === p ? null : p); setMenuOpen(false); }}
                   style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '9px 14px', background: panel === p ? C.accentBg : 'none', border: 'none', textAlign: 'left', fontSize: 13, color: panel === p ? C.accent : C.text, cursor: 'pointer', fontFamily: C.font, fontWeight: panel === p ? 600 : 400 }}
                 >
@@ -126,11 +135,11 @@ export function App() {
         <div style={{ borderBottom: `1px solid ${C.border}`, background: C.bgSubtle, overflowY: 'auto', maxHeight: '55vh', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', padding: '6px 12px 0', gap: 6 }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: C.textSecond, flex: 1 }}>
-              {panel === 'flows' ? '🔄 Record Flows' : '⚙️ Settings'}
+              {panel === 'flows' ? '🔄 Record Flows' : panel === 'mods' ? '🎯 UI Mods' : '⚙️ Settings'}
             </span>
             <button onClick={() => setPanel(null)} style={{ background: 'none', border: 'none', color: C.textMuted, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px' }}>×</button>
           </div>
-          {panel === 'flows' ? <FlowsPanel /> : <SettingsPanel />}
+          {panel === 'flows' ? <FlowsPanel /> : panel === 'mods' ? <UIModsPanel /> : <SettingsPanel />}
         </div>
       )}
 
@@ -401,7 +410,7 @@ function FlowsPanel() {
 
   // Load domain + flows on mount
   React.useEffect(() => {
-    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+    getCurrentPageTab().then((tab) => {
       if (tab?.url) {
         const d = new URL(tab.url).hostname;
         setDomain(d);
@@ -796,12 +805,27 @@ function FlowsPanel() {
 
 // ─── UI Mods Panel ────────────────────────────────────────────────────────────
 
+type PickedElement = {
+  selector: string;
+  tagName?: string;
+  text?: string;
+  ariaLabel?: string;
+  type?: string;
+  name?: string;
+  id?: string;
+  pageUrl?: string;
+  instruction?: string;
+  boundingBox?: { top: number; left: number; width: number; height: number };
+};
+
 function UIModsPanel() {
   const [domain, setDomain] = useState('');
   const [scripts, setScripts] = useState<string[]>([]);
   const [input, setInput] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [applying, setApplying] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<PickedElement | null>(null);
   const [status, setStatus] = useState('');
 
   React.useEffect(() => {
@@ -824,27 +848,95 @@ function UIModsPanel() {
     return () => chrome.storage.onChanged.removeListener(storageListener);
   }, []);
 
-  const applyChange = async () => {
-    if (!input.trim() || applying) return;
-    setApplying(true);
-    setStatus('');
+  React.useEffect(() => {
+    const listener = (msg: any) => {
+      if (msg.type === 'ELEMENT_SELECTED') {
+        setPicked(msg.payload as PickedElement);
+        setPicking(false);
+        setStatus('Element selected. Describe the change.');
+        setTimeout(() => setStatus(''), 3000);
+      }
+      if (msg.type === 'ELEMENT_CHANGE_REQUESTED') {
+        const selected = msg.payload as PickedElement;
+        setPicked(selected);
+        setPicking(false);
+        void applyTargetedChange(selected.instruction ?? '', selected);
+      }
+      if (msg.type === 'PICKER_CANCELLED') {
+        setPicking(false);
+        setStatus('Picker cancelled');
+        setTimeout(() => setStatus(''), 2000);
+      }
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  }, [apiKey, applying, domain]);
+
+  const getApiKey = async () => {
     const key = apiKey || await new Promise<string>((resolve) => {
       chrome.storage.local.get('gemini_api_key', (r) => resolve(r.gemini_api_key ?? ''));
     });
+    if (key !== apiKey) setApiKey(key);
+    return key;
+  };
+
+  const refreshScripts = (d = domain) => {
+    if (!d) return;
+    chrome.storage.local.get(`hawkeye_css_${d}`, (r) => {
+      setScripts(r[`hawkeye_css_${d}`] ?? []);
+    });
+  };
+
+  const startPicker = async () => {
+    const tab = await getCurrentPageTab();
+    if (!tab?.id) return;
+    setStatus('');
+    setPicking(true);
+    setPicked(null);
+    chrome.tabs.sendMessage(tab.id, { type: 'PICKER_START', payload: { promptForChange: true } }, (res) => {
+      const error = chrome.runtime.lastError;
+      if (error || !res?.ok) {
+        setPicking(false);
+        setStatus(`Could not start picker: ${error?.message ?? res?.error ?? 'content script unavailable'}`);
+        setTimeout(() => setStatus(''), 4000);
+      }
+    });
+  };
+
+  const stopPicker = async () => {
+    const tab = await getCurrentPageTab();
+    if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'PICKER_STOP' }, () => { void chrome.runtime.lastError; });
+    setPicking(false);
+  };
+
+  const applyTargetedChange = async (instruction: string, selected: PickedElement | null) => {
+    if (!instruction.trim() || applying) return;
+    setApplying(true);
+    setStatus('');
+    const key = await getApiKey();
     if (!key) {
       setApplying(false);
+      setStatus('Set API key in Settings first');
       return;
     }
-    if (key !== apiKey) setApiKey(key);
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await getCurrentPageTab();
     if (!tab?.id) { setApplying(false); return; }
 
-    // Ask agent to apply the UI change via run_js
+    const task = selected
+      ? [
+          'The user picked one exact element on the current page.',
+          `Selector: ${selected.selector}`,
+          `Element: ${selected.tagName ?? 'element'}${selected.text ? ` with text "${selected.text}"` : ''}${selected.ariaLabel ? ` and aria-label "${selected.ariaLabel}"` : ''}`,
+          `Apply this requested change ONLY to that selected element: ${instruction.trim()}`,
+          'Use the selector exactly. Choose the best tool: dom_op for text/attributes/removal, set_style for visual styles, insert_html for inserting content. Do not search for a different element by visible text.',
+        ].join('\n')
+      : `Apply this UI change to the current page: ${instruction.trim()}. Choose the best DOM/CSS tool.`;
+
     chrome.runtime.sendMessage({
       type: 'AGENT_RUN',
       tabId: tab.id,
       payload: {
-        task: `Apply this UI change to the current page using insert_css: ${input}. Use a single insert_css call with valid CSS rules. Keep it simple.`,
+        task,
         apiKey: key,
         provider: 'gemini',
       },
@@ -856,14 +948,15 @@ function UIModsPanel() {
         setInput('');
         setStatus(msg.type === 'AGENT_DONE' ? '✓ Applied' : `❌ ${msg.payload.error}`);
         setTimeout(() => setStatus(''), 3000);
-        // Refresh script list
-        chrome.storage.local.get(`hawkeye_css_${domain}`, (r) => {
-          setScripts(r[`hawkeye_css_${domain}`] ?? []);
-        });
+        refreshScripts();
         chrome.runtime.onMessage.removeListener(listener);
       }
     };
     chrome.runtime.onMessage.addListener(listener);
+  };
+
+  const applyChange = async () => {
+    await applyTargetedChange(input, picked);
   };
 
   const removeScript = async (index: number) => {
@@ -871,14 +964,14 @@ function UIModsPanel() {
     await chrome.storage.local.set({ [`hawkeye_css_${domain}`]: updated });
     setScripts(updated);
     // Reload tab to re-apply remaining
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await getCurrentPageTab();
     if (tab?.id) chrome.tabs.reload(tab.id);
   };
 
   const clearAll = async () => {
     await chrome.storage.local.remove(`hawkeye_css_${domain}`);
     setScripts([]);
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await getCurrentPageTab();
     if (tab?.id) chrome.tabs.reload(tab.id);
   };
 
@@ -888,12 +981,40 @@ function UIModsPanel() {
         UI Modifications — {domain || 'current page'}
       </div>
 
+      <div style={{ border: `1px solid ${picked ? C.accent : C.border}`, borderRadius: C.radius, padding: 10, background: picked ? C.accentBg : C.bg, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={picking ? stopPicker : startPicker}
+            disabled={applying}
+            title="Pick an element on the page and describe the change in the overlay"
+            style={{ background: picking ? C.red : C.accent, border: 'none', borderRadius: C.radiusSm, padding: '7px 12px', color: '#fff', fontSize: 12, fontWeight: 700, cursor: applying ? 'not-allowed' : 'pointer', fontFamily: C.font, opacity: applying ? 0.5 : 1 }}
+          >
+            {picking ? 'Cancel picker' : 'Pick element'}
+          </button>
+          <span style={{ fontSize: 11, color: picked ? C.accent : C.textSecond, lineHeight: 1.4 }}>
+            {picking ? 'Click an element on the page.' : picked ? 'Target locked. Your next change applies to this element.' : 'Use this when text matching is risky.'}
+          </span>
+        </div>
+        {picked && (
+          <div style={{ background: C.bg, border: `1px solid ${C.borderLight}`, borderRadius: C.radiusSm, padding: '7px 8px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.text }}>{picked.tagName ?? 'element'} {picked.id ? `#${picked.id}` : ''}</span>
+            <span style={{ fontSize: 10, color: C.textSecond, fontFamily: C.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{picked.selector}</span>
+            {(picked.text || picked.ariaLabel) && (
+              <span style={{ fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{picked.text || picked.ariaLabel}</span>
+            )}
+            <button onClick={() => setPicked(null)} style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, marginTop: 2, color: C.textSecond, fontSize: 11, cursor: 'pointer', fontFamily: C.font }}>Clear target</button>
+          </div>
+        )}
+      </div>
+
       {/* Input */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={'Describe a change, e.g.:\n"Make the background light blue"\n"Hide the cookie banner"\n"Make headings red and bold"'}
+          placeholder={picked
+            ? 'Describe what to change on the selected element, e.g. "rename to Client", "make text red", "hide it"'
+            : 'Describe a change, e.g.:\n"Make the background light blue"\n"Hide the cookie banner"\n"Make headings red and bold"'}
           rows={3}
           style={{ border: `1px solid ${C.border}`, borderRadius: C.radius, padding: '8px 10px', fontSize: 12, color: C.text, outline: 'none', fontFamily: C.font, resize: 'vertical', background: C.bg }}
         />
@@ -903,7 +1024,7 @@ function UIModsPanel() {
             disabled={!input.trim() || applying || !apiKey}
             style={{ background: C.accent, border: 'none', borderRadius: C.radiusSm, padding: '7px 14px', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: C.font, opacity: (!input.trim() || applying || !apiKey) ? 0.5 : 1 }}
           >
-            {applying ? '⏳ Applying…' : '✨ Apply'}
+            {applying ? 'Applying…' : picked ? 'Apply to selected' : 'Apply'}
           </button>
           {status && <span style={{ fontSize: 11, color: status.startsWith('✓') ? C.green : C.red }}>{status}</span>}
           {!apiKey && <span style={{ fontSize: 11, color: C.red }}>Set API key in Settings</span>}
