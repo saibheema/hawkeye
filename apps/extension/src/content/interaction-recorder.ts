@@ -28,6 +28,7 @@ let lastScrollAt = 0;
 let lastScrollY = 0;
 const suppressSubmitUntil = new WeakMap<HTMLFormElement, number>();
 const resumingSubmissions = new WeakSet<HTMLFormElement>();
+const lastRecordedFieldValues = new Map<string, string>();
 
 export function initInteractionRecorder() {
   try {
@@ -36,11 +37,13 @@ export function initInteractionRecorder() {
         if (message.type === 'FLOW_RECORD_START') {
           recording = true;
           lastScrollY = window.scrollY;
+          lastRecordedFieldValues.clear();
           sendResponse({ ok: true });
           return true;
         }
         if (message.type === 'FLOW_RECORD_STOP') {
           recording = false;
+          lastRecordedFieldValues.clear();
           sendResponse({ ok: true });
           return true;
         }
@@ -103,13 +106,17 @@ function recordClick(event: MouseEvent) {
 function recordInput(event: Event) {
   if (!recording || !event.isTrusted) return;
   const step = inputStepFromElement(event.target);
-  if (step) sendStep(step.tool, step.args, step.meta);
+  if (step) {
+    rememberFieldStep(step);
+    sendStep(step.tool, step.args, step.meta);
+  }
 }
 
 function recordChange(event: Event) {
   if (!recording || !event.isTrusted) return;
   const step = inputStepFromElement(event.target);
   if (!step) return;
+  rememberFieldStep(step);
   sendStep(step.tool, step.args, step.meta);
 }
 
@@ -275,6 +282,12 @@ function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {
     const label = labelFor(el);
 
     if (el instanceof HTMLSelectElement) {
+      const step = {
+        tool: 'select_option',
+        args: locatorArgs(el, { value: el.value }),
+        meta: { source: 'manual', label, originalValue: el.value },
+      };
+      if (isDuplicateFieldStep(step)) continue;
       steps.push({
         tool: 'select_option',
         args: locatorArgs(el, { value: el.value }),
@@ -286,7 +299,7 @@ function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {
     if (['button', 'submit', 'reset', 'file', 'image'].includes(el.type)) continue;
     if (['checkbox', 'radio'].includes(el.type) && !el.checked) continue;
 
-    steps.push({
+    const step = {
       tool: 'type_text',
       args: locatorArgs(el, { text: el.value }),
       meta: {
@@ -295,7 +308,9 @@ function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {
         label,
         originalValue: el.value,
       },
-    });
+    };
+    if (isDuplicateFieldStep(step)) continue;
+    steps.push(step);
   }
   return steps;
 }
@@ -320,7 +335,32 @@ function sendStep(tool: string, args: Record<string, unknown>, meta?: Record<str
 }
 
 function sendSteps(steps: RecordedStep[]) {
+  for (const step of steps) rememberFieldStep(step);
   void sendStepsAck(steps);
+}
+
+function rememberFieldStep(step: RecordedStep) {
+  const key = fieldStepKey(step);
+  const value = fieldStepValue(step);
+  if (key && value !== null) lastRecordedFieldValues.set(key, value);
+}
+
+function isDuplicateFieldStep(step: RecordedStep): boolean {
+  const key = fieldStepKey(step);
+  const value = fieldStepValue(step);
+  return !!key && value !== null && lastRecordedFieldValues.get(key) === value;
+}
+
+function fieldStepKey(step: RecordedStep): string | null {
+  if (step.tool !== 'type_text' && step.tool !== 'select_option') return null;
+  const selector = typeof step.args.selector === 'string' ? step.args.selector : '';
+  return selector ? `${step.tool}:${selector}` : null;
+}
+
+function fieldStepValue(step: RecordedStep): string | null {
+  if (step.tool === 'type_text') return typeof step.args.text === 'string' ? step.args.text : null;
+  if (step.tool === 'select_option') return typeof step.args.value === 'string' ? step.args.value : null;
+  return null;
 }
 
 function sendStepsAck(steps: RecordedStep[]): Promise<void> {
