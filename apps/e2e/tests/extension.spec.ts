@@ -336,6 +336,13 @@ test('records Enter search before immediate navigation', async ({ context, exten
     expect(steps.some((step: any) => step.tool === 'trigger_event' && step.args?.event === 'keydown' && step.args?.key === 'Enter')).toBe(true);
     expect(steps.length).toBeGreaterThanOrEqual(2);
 
+    await target.goto(baseUrl);
+    const flow = { id: 'flow_search_enter', name: 'Search enter', domain: '127.0.0.1', createdAt: Date.now(), steps, stepCount: steps.length };
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results).toHaveLength(1);
+    expect(results[0].ok).toBe(true);
+    await expect(target.locator('h1')).toHaveText('Results');
+
     await extensionPage.close();
     await target.close();
   });

@@ -842,30 +842,44 @@ export async function executeTool(
       case 'trigger_event': {
         type TriggerArgs = { selector: string; event: string; key?: string };
         const a = args as unknown as TriggerArgs;
+        const fireEvent = (o: TriggerArgs) => {
+          const els = Array.from(document.querySelectorAll(o.selector)) as HTMLElement[];
+          for (const el of els) {
+            let evt: Event;
+            if (['keydown', 'keyup', 'keypress'].includes(o.event)) {
+              evt = new KeyboardEvent(o.event, { key: o.key ?? '', bubbles: true, cancelable: true });
+            } else if (['click', 'dblclick', 'mouseover', 'mouseout', 'mouseenter', 'mouseleave'].includes(o.event)) {
+              evt = new MouseEvent(o.event, { bubbles: true, cancelable: true });
+            } else {
+              evt = new Event(o.event, { bubbles: true, cancelable: true });
+            }
+            el.dispatchEvent(evt);
+            const isEnterSubmit = o.event === 'keydown'
+              && o.key === 'Enter'
+              && (el instanceof HTMLInputElement || el instanceof HTMLSelectElement)
+              && !!el.form;
+            if ((o.event === 'submit' && el instanceof HTMLFormElement && !evt.defaultPrevented) || (isEnterSubmit && !evt.defaultPrevented)) {
+              const form = el instanceof HTMLFormElement ? el : (el as HTMLInputElement | HTMLSelectElement).form;
+              if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
+              else form?.submit();
+            }
+            if (o.event === 'focus') el.focus?.();
+            if (o.event === 'blur')  el.blur?.();
+          }
+          return { ok: true as const, count: els.length };
+        };
+        const frameId = await resolveRecordedFrameId(tabId, args);
+        if (frameId !== null) {
+          const res = await execInFrameId(tabId, frameId, fireEvent, a);
+          if (!res.ok) return res;
+          const count = Number((res.data as any)?.count ?? 0);
+          if (count === 0) return { ok: false, error: `No elements match selector: ${a.selector}` };
+          return { ok: true, data: { fired: args.event, affected: count } };
+        }
         const res = await chrome.scripting.executeScript({
           target: { tabId, allFrames: true },
           world: 'MAIN',
-          func: (o: TriggerArgs) => {
-            const els = Array.from(document.querySelectorAll(o.selector)) as HTMLElement[];
-            for (const el of els) {
-              let evt: Event;
-              if (['keydown', 'keyup', 'keypress'].includes(o.event)) {
-                evt = new KeyboardEvent(o.event, { key: o.key ?? '', bubbles: true, cancelable: true });
-              } else if (['click', 'dblclick', 'mouseover', 'mouseout', 'mouseenter', 'mouseleave'].includes(o.event)) {
-                evt = new MouseEvent(o.event, { bubbles: true, cancelable: true });
-              } else {
-                evt = new Event(o.event, { bubbles: true, cancelable: true });
-              }
-              el.dispatchEvent(evt);
-              if (o.event === 'submit' && el instanceof HTMLFormElement && !evt.defaultPrevented) {
-                if (typeof el.requestSubmit === 'function') el.requestSubmit();
-                else el.submit();
-              }
-              if (o.event === 'focus') el.focus?.();
-              if (o.event === 'blur')  el.blur?.();
-            }
-            return { ok: true, count: els.length };
-          },
+          func: fireEvent,
           args: [a],
         });
         const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);

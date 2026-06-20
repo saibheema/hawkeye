@@ -96,10 +96,10 @@ export function getSelector(el: Element): string {
   if (el.id) return `#${CSS.escape(el.id)}`;
 
   const testId = el.getAttribute('data-testid');
-  if (testId) return `[data-testid="${testId}"]`;
+  if (testId) return `[data-testid="${cssString(testId)}"]`;
 
   const ariaLabel = el.getAttribute('aria-label');
-  if (ariaLabel) return `${el.tagName.toLowerCase()}[aria-label="${ariaLabel}"]`;
+  if (ariaLabel) return `${el.tagName.toLowerCase()}[aria-label="${cssString(ariaLabel)}"]`;
 
   const name = (el as HTMLInputElement).name;
   if (name && ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName)) {
@@ -132,4 +132,8 @@ export function getSelector(el: Element): string {
   }
 
   return path.join(' > ');
+}
+
+function cssString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\A ');
 }
