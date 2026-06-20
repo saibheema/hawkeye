@@ -325,7 +325,7 @@ function ChatPanel({
           `Selector: ${pickedElement.selector}`,
           `Element: ${pickedElement.tagName ?? 'element'}${pickedElement.text ? ` with text "${pickedElement.text}"` : ''}${pickedElement.ariaLabel ? ` and aria-label "${pickedElement.ariaLabel}"` : ''}`,
           `User request for that selected element: ${visibleTask}`,
-          'Apply the request ONLY to that selected element. Use the selector exactly. If the selected element is an SVG/icon or the user asks for an icon replacement, use replace_selected_icon so the icon stays fitted to the existing box; for non-standard icons, generate a compact safe SVG yourself and pass it as svg. If the user asks for a background image, texture, pattern, or illustration, generate a compact safe SVG yourself and call set_background_image. Otherwise choose the best tool: dom_op for text/attributes/removal, set_style for visual styles, insert_html for inserting content. Do not search for a different element by visible text.',
+          'Apply the request ONLY to that selected element. Use the selector exactly. If the selected element is an SVG/icon or the user asks for an icon replacement, use replace_selected_icon so the icon stays fitted to the existing box; for non-standard icons, generate a compact safe SVG yourself and pass it as svg. If the user asks for a background image, texture, pattern, or illustration, generate a compact safe SVG yourself and call set_background_image. For visual styles, call set_style once with a styles object containing every requested change; interpret "text color" as color and "boarder" as border. Otherwise choose the best tool: dom_op for text/attributes/removal, set_style for visual styles, insert_html for inserting content. Do not search for a different element by visible text.',
         ].join('\n')
       : visibleTask;
     const history = messages
@@ -1013,7 +1013,7 @@ function UIModsPanel() {
           `Selector: ${selected.selector}`,
           `Element: ${selected.tagName ?? 'element'}${selected.text ? ` with text "${selected.text}"` : ''}${selected.ariaLabel ? ` and aria-label "${selected.ariaLabel}"` : ''}`,
           `Apply this requested change ONLY to that selected element: ${instruction.trim()}`,
-          'Use the selector exactly. Choose the best tool: dom_op for text/attributes/removal, set_style for visual styles, insert_html for inserting content. Do not search for a different element by visible text.',
+          'Use the selector exactly. For visual styles, call set_style once with a styles object containing every requested change; interpret "text color" as color and "boarder" as border. Choose the best tool: dom_op for text/attributes/removal, set_style for visual styles, insert_html for inserting content. Do not search for a different element by visible text.',
         ].join('\n')
       : `Apply this UI change to the current page: ${instruction.trim()}. Choose the best DOM/CSS tool.`;
 

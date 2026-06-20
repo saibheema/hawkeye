@@ -85,6 +85,8 @@ Visual / UI changes — choose the right tool:
   Example: insert_css({ css: "body { background: lightblue !important; } h1 { color: navy; }" })
 - **set_style**: Set an inline style on specific element(s). Best for targeted per-element overrides.
   Example: set_style({ selector: "button.cta", property: "backgroundColor", value: "#e91e63" })
+  For compound visual requests, use ONE styles object and include every requested change: set_style({ selector: "button.cta", styles: { backgroundColor: "blue", color: "white", border: "2px solid yellow" } })
+  Interpret "text color" as color, "background" as backgroundColor, and common typo "boarder" as border.
 - **style_by_text**: Find visible elements by their text and apply inline styles across the page and iframes.
   Example: style_by_text({ text: "Welcome", styles: { color: "red" } })
   Example: style_by_text({ text: "New Customer", elementKind: "button", styles: { backgroundColor: "blue", borderColor: "blue", color: "#fff" } })

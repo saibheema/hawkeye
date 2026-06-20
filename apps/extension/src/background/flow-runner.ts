@@ -190,7 +190,7 @@ export async function replayFlow(
         error = `Could not navigate to recorded start URL: ${nav.error}`;
         debug = await captureReplayDebug(tabId);
       } else {
-        await new Promise((r) => setTimeout(r, 700));
+        await waitForReplaySettle(tabId, 1500);
       }
     }
 
@@ -210,8 +210,7 @@ export async function replayFlow(
         break;
       }
 
-      // Short pause between steps to let the page react
-      await new Promise((r) => setTimeout(r, 400));
+      await waitAfterReplayStep(tabId, step);
     }
 
     const result: RunResult = {
@@ -246,6 +245,39 @@ function startUrlForFlow(flow: Flow): string | null {
   const domain = flow.domain.toLowerCase();
   if (domain === 'google.com' || domain === 'www.google.com') return 'https://www.google.com/';
   return null;
+}
+
+async function waitAfterReplayStep(tabId: number, step: FlowStep): Promise<void> {
+  if (['click', 'select_option', 'trigger_event'].includes(step.tool)) {
+    await waitForReplaySettle(tabId, 1200);
+    return;
+  }
+  await waitForReplaySettle(tabId, 450);
+}
+
+async function waitForReplaySettle(tabId: number, minimumMs: number): Promise<void> {
+  const started = Date.now();
+  await waitForTabAndFramesReady(tabId, Math.max(2500, minimumMs));
+  const remaining = minimumMs - (Date.now() - started);
+  if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+}
+
+async function waitForTabAndFramesReady(tabId: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      const frameStates = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: () => document.readyState,
+      });
+      const framesReady = frameStates.length === 0 || frameStates.every((result) => result.result === 'interactive' || result.result === 'complete');
+      if (tab.status === 'complete' && framesReady) return;
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
 }
 
 async function captureReplayDebug(tabId: number): Promise<ReplayDebug> {

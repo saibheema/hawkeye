@@ -253,7 +253,7 @@ function findBySemanticCandidate(candidate: LocatorCandidate, kind: 'click' | 't
   const value = normalize(candidate.value ?? '');
   if (!value) return null;
   const selector = kind === 'click'
-    ? 'button,a,[role="button"],input[type="button"],input[type="submit"],input[type="reset"],label,[onclick]'
+    ? 'button,a,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],label,[onclick],[tabindex]'
     : kind === 'select'
       ? 'select'
       : 'input:not([type="hidden"]),textarea';

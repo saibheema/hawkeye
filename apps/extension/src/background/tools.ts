@@ -163,15 +163,34 @@ export const TOOLS: LLMTool[] = [
   },
   {
     name: 'set_style',
-    description: 'Set inline CSS properties directly on matched element(s). More targeted than insert_css — affects only those elements. Good for one-off per-element style overrides like color, fontSize, border, opacity, display.',
+    description: 'Set one or more inline CSS properties directly on matched element(s). More targeted than insert_css — affects only those elements. Use a single styles object for compound requests like background + text color + border. Treat "boarder" as "border".',
     parameters: {
       type: 'object',
       properties: {
         selector: { type: 'string', description: 'CSS selector for target element(s)' },
-        property: { type: 'string', description: 'CSS property name in camelCase or kebab-case. Examples: "backgroundColor", "fontSize", "border", "opacity", "display"' },
+        property: { type: 'string', description: 'Optional single CSS property name in camelCase or kebab-case. Examples: "backgroundColor", "color", "fontSize", "border", "opacity", "display"' },
         value: { type: 'string', description: 'CSS value. Examples: "red", "24px", "none", "1px solid blue", "0.5"' },
+        styles: {
+          type: 'object',
+          description: 'Multiple CSS styles to apply in one operation. Use color for text color, backgroundColor for background, border for visible borders.',
+          properties: {
+            color: { type: 'string', description: 'Text color, e.g. "white".' },
+            backgroundColor: { type: 'string', description: 'Background color, e.g. "blue".' },
+            background: { type: 'string', description: 'Background shorthand.' },
+            border: { type: 'string', description: 'Visible border shorthand, e.g. "2px solid yellow". A bare color is accepted.' },
+            borderColor: { type: 'string', description: 'Border color. Hawkeye will also ensure border width/style are visible.' },
+            borderWidth: { type: 'string', description: 'Border width, e.g. "2px".' },
+            borderStyle: { type: 'string', description: 'Border style, e.g. "solid".' },
+            outline: { type: 'string', description: 'Outline shorthand.' },
+            boxShadow: { type: 'string', description: 'Box shadow.' },
+            fontSize: { type: 'string', description: 'Font size, e.g. "18px".' },
+            fontWeight: { type: 'string', description: 'Font weight, e.g. "700" or "bold".' },
+            opacity: { type: 'string', description: 'Opacity, e.g. "0.5".' },
+            display: { type: 'string', description: 'Display value, e.g. "none" or "block".' },
+          },
+        },
       },
-      required: ['selector', 'property', 'value'],
+      required: ['selector'],
     },
   },
   {
@@ -192,7 +211,10 @@ export const TOOLS: LLMTool[] = [
           properties: {
             color: { type: 'string', description: 'Text color, e.g. "red" or "#ff0000".' },
             backgroundColor: { type: 'string', description: 'Background color, e.g. "blue".' },
+            border: { type: 'string', description: 'Visible border shorthand, e.g. "2px solid yellow". A bare color is accepted.' },
             borderColor: { type: 'string', description: 'Border color.' },
+            borderWidth: { type: 'string', description: 'Border width, e.g. "2px".' },
+            borderStyle: { type: 'string', description: 'Border style, e.g. "solid".' },
             fontSize: { type: 'string', description: 'Font size, e.g. "18px".' },
             fontWeight: { type: 'string', description: 'Font weight, e.g. "700" or "bold".' },
             opacity: { type: 'string', description: 'Opacity, e.g. "0.5".' },
@@ -377,7 +399,7 @@ export async function executeTool(
               }
               function findBySemantic(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
                 const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
-                const selector = kind === 'click' ? 'button,a,[role="button"],input[type="button"],input[type="submit"],input[type="reset"],label,[onclick]' : kind === 'select' ? 'select' : 'input:not([type="hidden"]),textarea';
+                const selector = kind === 'click' ? 'button,a,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],label,[onclick],[tabindex]' : kind === 'select' ? 'select' : 'input:not([type="hidden"]),textarea';
                 const elements = Array.from(document.querySelectorAll(selector));
                 for (const candidate of candidates) {
                   const needle = normalize(candidate.value || '');
@@ -403,7 +425,7 @@ export async function executeTool(
               }
               function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
               async function waitForReplayElement(payload: Record<string, any>, kind: 'click' | 'type' | 'select') {
-                const deadline = Date.now() + 5000;
+                const deadline = Date.now() + 12000;
                 let el = findReplayElement(payload, kind);
                 while (!el && Date.now() < deadline) {
                   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -438,7 +460,7 @@ export async function executeTool(
               }
               function findBySemantic(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
                 const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
-                const selector = kind === 'click' ? 'button,a,[role="button"],input[type="button"],input[type="submit"],input[type="reset"],label,[onclick]' : kind === 'select' ? 'select' : 'input:not([type="hidden"]),textarea';
+                const selector = kind === 'click' ? 'button,a,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],label,[onclick],[tabindex]' : kind === 'select' ? 'select' : 'input:not([type="hidden"]),textarea';
                 const elements = Array.from(document.querySelectorAll(selector));
                 for (const candidate of candidates) {
                   const needle = normalize(candidate.value || '');
@@ -464,7 +486,7 @@ export async function executeTool(
               }
               function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
               async function waitForReplayElement(payload: Record<string, any>, kind: 'click' | 'type' | 'select') {
-                const deadline = Date.now() + 5000;
+                const deadline = Date.now() + 12000;
                 let el = findReplayElement(payload, kind);
                 while (!el && Date.now() < deadline) {
                   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -518,7 +540,7 @@ export async function executeTool(
               }
               function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
               async function waitForReplayElement(payload: Record<string, any>) {
-                const deadline = Date.now() + 5000;
+                const deadline = Date.now() + 12000;
                 let el = findReplayElement(payload);
                 while (!el && Date.now() < deadline) {
                   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -564,7 +586,7 @@ export async function executeTool(
               }
               function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
               async function waitForReplayElement(payload: Record<string, any>) {
-                const deadline = Date.now() + 5000;
+                const deadline = Date.now() + 12000;
                 let el = findReplayElement(payload);
                 while (!el && Date.now() < deadline) {
                   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -644,7 +666,7 @@ export async function executeTool(
                 return { ok: true, value };
               }
               async function waitForReplayElement(payload: Record<string, any>) {
-                const deadline = Date.now() + 5000;
+                const deadline = Date.now() + 12000;
                 let el = findReplayElement(payload);
                 while (!el && Date.now() < deadline) {
                   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -716,7 +738,7 @@ export async function executeTool(
                 return { ok: true, value };
               }
               async function waitForReplayElement(payload: Record<string, any>) {
-                const deadline = Date.now() + 5000;
+                const deadline = Date.now() + 12000;
                 let el = findReplayElement(payload);
                 while (!el && Date.now() < deadline) {
                   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1128,17 +1150,76 @@ export async function executeTool(
       }
 
       case 'set_style': {
-        type SetStyleArgs = { selector: string; property: string; value: string };
+        type SetStyleArgs = { selector: string; property?: string; value?: string; styles?: Record<string, string> };
         const a = args as unknown as SetStyleArgs;
         const res = await chrome.scripting.executeScript({
           target: { tabId, allFrames: true },
           world: 'MAIN',
           func: (o: SetStyleArgs) => {
             const els = Array.from(document.querySelectorAll(o.selector)) as HTMLElement[];
-            // Accept both camelCase and kebab-case property names
-            const prop = o.property.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-            for (const el of els) (el.style as any)[prop] = o.value;
-            return { ok: true, count: els.length, frameUrl: location.href };
+            const styles = styleEntries(o);
+            if (styles.length === 0) return { ok: false, error: 'No style property/value provided' };
+            for (const el of els) applyStyles(el, styles);
+            return { ok: true, count: els.length, frameUrl: location.href, styles };
+
+            function styleEntries(payload: SetStyleArgs): Array<[string, string]> {
+              const entries: Array<[string, string]> = [];
+              if (payload.styles && typeof payload.styles === 'object') {
+                for (const [key, value] of Object.entries(payload.styles)) {
+                  if (value !== undefined && value !== null && String(value).trim()) entries.push([key, String(value)]);
+                }
+              }
+              if (payload.property && payload.value !== undefined && payload.value !== null) {
+                entries.push([payload.property, String(payload.value)]);
+              }
+              return normalizeEntries(entries);
+            }
+            function normalizeEntries(entries: Array<[string, string]>): Array<[string, string]> {
+              const out: Array<[string, string]> = [];
+              const names = new Set(entries.map(([key]) => normalizeProp(key)));
+              for (const [rawProp, rawValue] of entries) {
+                const prop = normalizeProp(rawProp);
+                let value = rawValue;
+                if (prop === 'border' && looksLikeColor(value)) value = `2px solid ${value}`;
+                out.push([prop, value]);
+                if (prop === 'border-color' && !names.has('border-style')) out.push(['border-style', 'solid']);
+                if (prop === 'border-color' && !names.has('border-width')) out.push(['border-width', '2px']);
+              }
+              return out;
+            }
+            function normalizeProp(prop: string): string {
+              const compact = String(prop).trim()
+                .replace(/\s+/g, '-')
+                .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+                .toLowerCase();
+              const aliases: Record<string, string> = {
+                bg: 'background-color',
+                backgroundcolour: 'background-color',
+                backgroundcolor: 'background-color',
+                'background-colour': 'background-color',
+                text: 'color',
+                'text-color': 'color',
+                textcolor: 'color',
+                fontcolor: 'color',
+                'font-color': 'color',
+                boarder: 'border',
+                'boarder-color': 'border-color',
+                boardercolor: 'border-color',
+              };
+              return aliases[compact] ?? compact;
+            }
+            function looksLikeColor(value: string): boolean {
+              const v = value.trim();
+              return /^#[0-9a-f]{3,8}$/i.test(v)
+                || /^rgba?\(/i.test(v)
+                || /^hsla?\(/i.test(v)
+                || /^[a-z]+$/i.test(v);
+            }
+            function applyStyles(el: HTMLElement, stylesToApply: Array<[string, string]>) {
+              for (const [prop, value] of stylesToApply) {
+                el.style.setProperty(prop, value, 'important');
+              }
+            }
           },
           args: [a],
         });
@@ -1242,7 +1323,7 @@ export async function executeTool(
           }
           function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
           async function waitForReplayElements(payload: TriggerArgs): Promise<HTMLElement[]> {
-            const deadline = Date.now() + 5000;
+            const deadline = Date.now() + 12000;
             let elements = findReplayElements(payload);
             while (elements.length === 0 && Date.now() < deadline) {
               await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1402,14 +1483,50 @@ export async function executeTool(
               ].filter(Boolean).join(' ').trim().toLowerCase();
               if (!label.includes(needle)) continue;
               if (o.elementKind !== 'button' && el.children.length > 0 && label !== needle) continue;
-              for (const [property, value] of Object.entries(o.styles)) {
-                const prop = property.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-                (el.style as any)[prop] = value;
+              for (const [property, value] of normalizeStyleEntries(Object.entries(o.styles))) {
+                el.style.setProperty(property, value, 'important');
               }
               count++;
               if (o.elementKind !== 'button') break;
             }
             return { ok: true as const, count, frameUrl: location.href };
+            function normalizeStyleEntries(entries: Array<[string, string]>): Array<[string, string]> {
+              const out: Array<[string, string]> = [];
+              const names = new Set(entries.map(([key]) => normalizeStyleProp(key)));
+              for (const [rawProp, rawValue] of entries) {
+                const prop = normalizeStyleProp(rawProp);
+                let value = rawValue;
+                if (prop === 'border' && looksLikeColor(value)) value = `2px solid ${value}`;
+                out.push([prop, value]);
+                if (prop === 'border-color' && !names.has('border-style')) out.push(['border-style', 'solid']);
+                if (prop === 'border-color' && !names.has('border-width')) out.push(['border-width', '2px']);
+              }
+              return out;
+            }
+            function normalizeStyleProp(prop: string): string {
+              const compact = String(prop).trim()
+                .replace(/\s+/g, '-')
+                .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+                .toLowerCase();
+              const aliases: Record<string, string> = {
+                bg: 'background-color',
+                backgroundcolor: 'background-color',
+                text: 'color',
+                'text-color': 'color',
+                textcolor: 'color',
+                boarder: 'border',
+                'boarder-color': 'border-color',
+                boardercolor: 'border-color',
+              };
+              return aliases[compact] ?? compact;
+            }
+            function looksLikeColor(value: string): boolean {
+              const v = value.trim();
+              return /^#[0-9a-f]{3,8}$/i.test(v)
+                || /^rgba?\(/i.test(v)
+                || /^hsla?\(/i.test(v)
+                || /^[a-z]+$/i.test(v);
+            }
           },
           args: [a],
         });

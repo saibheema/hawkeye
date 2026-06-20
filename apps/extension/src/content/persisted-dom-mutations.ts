@@ -110,13 +110,70 @@ function applyDomOp(args: Record<string, unknown>) {
 
 function applySetStyle(args: Record<string, unknown>) {
   const selector = String(args.selector ?? '');
-  const property = String(args.property ?? '');
-  const value = String(args.value ?? '');
-  if (!selector || !property) return;
-  const prop = property.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  if (!selector) return;
+  const styles = styleEntries(args);
+  if (styles.length === 0) return;
   for (const el of Array.from(document.querySelectorAll(selector)) as HTMLElement[]) {
-    (el.style as any)[prop] = value;
+    for (const [prop, value] of styles) el.style.setProperty(prop, value, 'important');
   }
+}
+
+function styleEntries(args: Record<string, unknown>): Array<[string, string]> {
+  const entries: Array<[string, string]> = [];
+  const styles = args.styles;
+  if (styles && typeof styles === 'object') {
+    for (const [key, value] of Object.entries(styles as Record<string, unknown>)) {
+      if (value !== undefined && value !== null && String(value).trim()) entries.push([key, String(value)]);
+    }
+  }
+  if (typeof args.property === 'string' && args.value !== undefined && args.value !== null) {
+    entries.push([args.property, String(args.value)]);
+  }
+  return normalizeStyleEntries(entries);
+}
+
+function normalizeStyleEntries(entries: Array<[string, string]>): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  const names = new Set(entries.map(([key]) => normalizeStyleProp(key)));
+  for (const [rawProp, rawValue] of entries) {
+    const prop = normalizeStyleProp(rawProp);
+    let value = rawValue;
+    if (prop === 'border' && looksLikeColor(value)) value = `2px solid ${value}`;
+    out.push([prop, value]);
+    if (prop === 'border-color' && !names.has('border-style')) out.push(['border-style', 'solid']);
+    if (prop === 'border-color' && !names.has('border-width')) out.push(['border-width', '2px']);
+  }
+  return out;
+}
+
+function normalizeStyleProp(prop: string): string {
+  const compact = String(prop).trim()
+    .replace(/\s+/g, '-')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .toLowerCase();
+  const aliases: Record<string, string> = {
+    bg: 'background-color',
+    backgroundcolour: 'background-color',
+    backgroundcolor: 'background-color',
+    'background-colour': 'background-color',
+    text: 'color',
+    'text-color': 'color',
+    textcolor: 'color',
+    fontcolor: 'color',
+    'font-color': 'color',
+    boarder: 'border',
+    'boarder-color': 'border-color',
+    boardercolor: 'border-color',
+  };
+  return aliases[compact] ?? compact;
+}
+
+function looksLikeColor(value: string): boolean {
+  const v = value.trim();
+  return /^#[0-9a-f]{3,8}$/i.test(v)
+    || /^rgba?\(/i.test(v)
+    || /^hsla?\(/i.test(v)
+    || /^[a-z]+$/i.test(v);
 }
 
 function applyCssVar(args: Record<string, unknown>) {
@@ -199,9 +256,8 @@ function applyStyleByText(args: Record<string, unknown>) {
     ].filter(Boolean).join(' ').trim().toLowerCase();
     if (!label.includes(text)) continue;
     if (elementKind !== 'button' && el.children.length > 0 && label !== text) continue;
-    for (const [property, value] of Object.entries(styles)) {
-      const prop = property.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-      (el.style as any)[prop] = value;
+    for (const [property, value] of normalizeStyleEntries(Object.entries(styles))) {
+      el.style.setProperty(property, value, 'important');
     }
     if (elementKind !== 'button') break;
   }
