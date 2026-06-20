@@ -89,8 +89,12 @@ function onClick(e: MouseEvent) {
   e.preventDefault();
   e.stopPropagation();
 
-  const target = e.target as Element;
+  let target = e.target as Element;
   if (!target || isHawkeyePickerElement(target)) return;
+  const ownerSvg = target instanceof SVGElement && target.tagName.toLowerCase() !== 'svg'
+    ? target.ownerSVGElement
+    : null;
+  if (ownerSvg) target = ownerSvg;
 
   const selector = getSelector(target);
   const rect = target.getBoundingClientRect();

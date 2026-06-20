@@ -39,6 +39,7 @@ const PAGE_MUTATION_TOOLS = new Set([
   'insert_html',
   'set_css_var',
   'replace_icon',
+  'replace_selected_icon',
 ]);
 const SYSTEM_PROMPT = `You are Hawkeye, an expert browser automation AI.
 You have access to tools to interact with the current web page.
@@ -69,7 +70,8 @@ Tool selection — pick the right one immediately:
 - Change an input placeholder by label/nearby text → set_placeholder_by_label
 - Add an option to a dropdown/select by label → add_dropdown_option
 - Re-theme with CSS variables → set_css_var
-- Change icon-only controls ("change + icon to X", "replace search icon with close") → replace_icon
+- Change icon-only controls by name ("change + icon to X", "replace search icon with close") → replace_icon
+- Change a picked/selected SVG or icon element to another icon → replace_selected_icon
 - Remove elements → dom_op (op: remove)
 - Change attributes (href, placeholder, src) → dom_op (op: set_attr)
 - Add new HTML nodes → insert_html
@@ -93,6 +95,8 @@ Visual / UI changes — choose the right tool:
 - **replace_icon**: Replace icon-only buttons or controls by glyph/accessibility label/SVG title/common icon name.
   Example: replace_icon({ target: "+", replacement: "X" })
   Example: replace_icon({ target: "search", replacement: "close" })
+- **replace_selected_icon**: Replace the icon inside an exact known selector while preserving the existing SVG/control size.
+  Example: replace_selected_icon({ selector: "button[aria-label='Add files and tools'] svg", replacement: "X" })
 - **dom_op**: Change text/HTML content, attributes, remove elements, or toggle classes.
   Example: dom_op({ op: "set_text", selector: "h1", value: "Welcome back!" })
   Example: dom_op({ op: "remove", selector: ".cookie-popup" })
@@ -228,11 +232,24 @@ function parseDirectIconReplacement(message: string): { target: string; replacem
   return { target, replacement };
 }
 
+function parseDirectSelectedIconReplacement(message: string): { selector: string; replacement: string } | null {
+  if (!/\bicon\b/i.test(message) || !/\bSelector:\s*/i.test(message)) return null;
+  const selector = message.match(/Selector:\s*(.+?)(?:\n|$)/i)?.[1]?.trim();
+  const request = message.match(/User request for that selected element:\s*(.+?)(?:\n|$)/i)?.[1]?.trim() ?? message;
+  const match =
+    request.match(/\b(?:change|replace|rename|set|update|make|turn)\b.+?\b(?:to|with|as|into)\s+(.+?)$/i)
+    ?? request.match(/\b(?:to|with|as|into)\s+(.+?)$/i);
+  const replacement = cleanIconText(match?.[1] ?? request);
+  if (!selector || !replacement || selector.length > 500 || replacement.length > 100) return null;
+  return { selector, replacement };
+}
+
 function cleanIconText(value: string): string {
   return value
     .trim()
     .replace(/^["'`]+|["'`]+$/g, '')
     .replace(/\b(?:the\s+)?icon\b/gi, '')
+    .replace(/\blike\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -336,6 +353,37 @@ export async function runAgent(
   permissionGate: (action: string, args: Record<string, unknown>) => Promise<boolean>
 ): Promise<string> {
   if (shouldUseDirectShortcuts(config)) {
+    const directSelectedIconReplacement = parseDirectSelectedIconReplacement(userMessage);
+    if (directSelectedIconReplacement) {
+      onStep({
+        type: 'tool_call',
+        content: 'Calling replace_selected_icon',
+        tool: 'replace_selected_icon',
+        args: directSelectedIconReplacement,
+      });
+
+      const result = await executeTool('replace_selected_icon', directSelectedIconReplacement, tabId);
+      onStep({
+        type: 'tool_result',
+        content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+        tool: 'replace_selected_icon',
+        result: result.data ?? result.error,
+      });
+
+      if (result.ok) {
+        const affected = (result.data as { affected?: number } | undefined)?.affected ?? 0;
+        const answer = affected > 0
+          ? `Changed the selected icon to "${directSelectedIconReplacement.replacement}".`
+          : `I could not find the selected icon selector "${directSelectedIconReplacement.selector}".`;
+        onStep({ type: 'answer', content: answer });
+        return answer;
+      }
+
+      const answer = `I could not change the selected icon: ${result.error}`;
+      onStep({ type: 'answer', content: answer });
+      return answer;
+    }
+
     const directIconReplacement = parseDirectIconReplacement(userMessage);
     if (directIconReplacement) {
       onStep({

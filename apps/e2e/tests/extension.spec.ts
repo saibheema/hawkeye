@@ -1115,6 +1115,58 @@ test('header picker scopes the next chat instruction to the selected element', a
   });
 });
 
+test('header picker replaces selected svg icon with fitted X vector', async ({ context, extensionId }) => {
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <button id="iconButton" aria-label="Add files" style="width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;color:#202124">
+          <svg id="plusIcon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          </svg>
+        </button>
+      </body>
+    </html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    await target.locator('#plusIcon').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    await extensionPage.evaluate(() => chrome.storage.local.set({ gemini_api_key: 'not-needed-for-direct-picker' }));
+
+    const before = await target.locator('#plusIcon').evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { width: style.width, height: style.height };
+    });
+    await extensionPage.getByTitle('Pick an element to target your next Hawkeye message').click();
+    await target.locator('#plusIcon').click();
+
+    await expect(extensionPage.getByText('Selected svg')).toBeVisible();
+    await extensionPage.getByPlaceholder('Tell Hawkeye how to change the selected element…').fill('update it to X like icon');
+    await extensionPage.locator('button').filter({ hasText: '➤' }).click();
+
+    await expect.poll(async () => {
+      return target.locator('#plusIcon path[d="M6 6L18 18M18 6L6 18"]').count();
+    }, { timeout: 10_000 }).toBe(1);
+
+    await expect(target.locator('#plusIcon')).toHaveAttribute('viewBox', '0 0 24 24');
+    await expect(target.locator('#plusIcon')).toHaveAttribute('aria-label', 'X');
+    await expect(target.locator('#plusIcon text')).toHaveCount(0);
+    const after = await target.locator('#plusIcon').evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { width: style.width, height: style.height, overflow: style.overflow };
+    });
+    expect(after.width).toBe(before.width);
+    expect(after.height).toBe(before.height);
+    expect(after.overflow).toBe('hidden');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('live Avis Ford scheduler records through contact screen without booking', async ({
   context,
   extensionId,

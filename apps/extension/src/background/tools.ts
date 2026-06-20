@@ -304,6 +304,18 @@ export const TOOLS: LLMTool[] = [
       required: ['target', 'replacement'],
     },
   },
+  {
+    name: 'replace_selected_icon',
+    description: 'Replace the icon inside one known selector. Use when the user picked an exact SVG/icon element and asks to change it to another icon. Preserves the existing icon box and fits the replacement inside it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'Exact CSS selector for the picked icon/SVG/control.' },
+        replacement: { type: 'string', description: 'Replacement icon text/glyph/name, e.g. "X", "close", "search", "plus".' },
+      },
+      required: ['selector', 'replacement'],
+    },
+  },
 ];
 
 // ─── Executor ─────────────────────────────────────────────────────────────────
@@ -1589,7 +1601,10 @@ export async function executeTool(
               span.style.display = 'inline-flex';
               span.style.alignItems = 'center';
               span.style.justifyContent = 'center';
+              span.style.width = '100%';
+              span.style.height = '100%';
               span.style.font = 'inherit';
+              span.style.fontWeight = '700';
               span.style.lineHeight = '1';
               control.appendChild(span);
             }
@@ -1636,6 +1651,7 @@ export async function executeTool(
             function cleanReplacement(value: string): string {
               return String(value ?? '')
                 .replace(/\bicon\b/gi, '')
+                .replace(/\blike\b/gi, '')
                 .replace(/\s+/g, ' ')
                 .trim();
             }
@@ -1657,6 +1673,149 @@ export async function executeTool(
         const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
         if (affected === 0) return { ok: false, error: `No icon matched: ${a.target}` };
         await persistDomMutation(tabId, 'replace_icon', a as unknown as Record<string, unknown>, res);
+        return { ok: true, data: { affected } };
+      }
+
+      case 'replace_selected_icon': {
+        type ReplaceSelectedIconArgs = { selector: string; replacement: string };
+        const a = args as unknown as ReplaceSelectedIconArgs;
+        const res = await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          world: 'MAIN',
+          func: (o: ReplaceSelectedIconArgs) => {
+            const replacement = cleanReplacement(o.replacement);
+            if (!o.selector || !replacement) return { ok: true as const, count: 0, frameUrl: location.href };
+            const targets = Array.from(document.querySelectorAll(o.selector));
+            let count = 0;
+
+            for (const target of targets) {
+              if (target instanceof SVGElement) {
+                const svg = target.tagName.toLowerCase() === 'svg' ? target : target.ownerSVGElement;
+                if (!svg) continue;
+                renderSvgIcon(svg, replacement);
+                labelControl(svg, replacement);
+                count++;
+                continue;
+              }
+
+              if (!(target instanceof HTMLElement)) continue;
+              const svg = target.querySelector('svg');
+              if (svg instanceof SVGElement) {
+                renderSvgIcon(svg, replacement);
+                labelControl(target, replacement);
+                count++;
+                continue;
+              }
+
+              replaceControlIcon(target, replacement);
+              count++;
+            }
+
+            return { ok: true as const, count, frameUrl: location.href };
+
+            function labelControl(el: Element, value: string) {
+              const control = el.closest('button,a,[role="button"],[role="link"],[aria-label],[title],[jsaction]') as HTMLElement | null;
+              const labelTarget = control ?? (el instanceof HTMLElement ? el : null);
+              if (!labelTarget) return;
+              labelTarget.dataset.hawkeyeIconReplaced = value;
+              labelTarget.setAttribute('aria-label', value);
+              labelTarget.setAttribute('title', value);
+            }
+
+            function renderSvgIcon(svg: SVGElement, value: string) {
+              const display = displayIcon(value);
+              const normalized = normalizeIconText(value);
+              svg.replaceChildren();
+              svg.dataset.hawkeyeIconReplacement = value;
+              svg.setAttribute('viewBox', '0 0 24 24');
+              svg.setAttribute('aria-label', value);
+              svg.setAttribute('role', 'img');
+              svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+              if (!svg.getAttribute('width') && !svg.style.width) svg.setAttribute('width', '24');
+              if (!svg.getAttribute('height') && !svg.style.height) svg.setAttribute('height', '24');
+              svg.style.overflow = 'hidden';
+              svg.style.display = svg.style.display || 'inline-block';
+              svg.style.verticalAlign = svg.style.verticalAlign || 'middle';
+
+              if (['x', '×', 'close', 'remove', 'dismiss', 'clear'].includes(normalized)) {
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', 'M6 6L18 18M18 6L6 18');
+                path.setAttribute('fill', 'none');
+                path.setAttribute('stroke', 'currentColor');
+                path.setAttribute('stroke-width', '2.75');
+                path.setAttribute('stroke-linecap', 'round');
+                path.setAttribute('stroke-linejoin', 'round');
+                svg.appendChild(path);
+                return;
+              }
+
+              const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+              text.setAttribute('x', '12');
+              text.setAttribute('y', '12');
+              text.setAttribute('text-anchor', 'middle');
+              text.setAttribute('dominant-baseline', 'central');
+              text.setAttribute('fill', 'currentColor');
+              text.setAttribute('font-size', display.length <= 2 ? '15' : '9');
+              text.setAttribute('font-weight', '700');
+              text.textContent = display;
+              svg.appendChild(text);
+            }
+
+            function replaceControlIcon(control: HTMLElement, value: string) {
+              const display = displayIcon(value);
+              control.dataset.hawkeyeIconReplaced = value;
+              control.setAttribute('aria-label', value);
+              control.setAttribute('title', value);
+              if (control instanceof HTMLInputElement) {
+                control.value = display;
+                return;
+              }
+              control.replaceChildren();
+              const span = document.createElement('span');
+              span.dataset.hawkeyeIconReplacement = 'true';
+              span.textContent = display;
+              span.style.display = 'inline-flex';
+              span.style.alignItems = 'center';
+              span.style.justifyContent = 'center';
+              span.style.width = '100%';
+              span.style.height = '100%';
+              span.style.font = 'inherit';
+              span.style.fontWeight = '700';
+              span.style.lineHeight = '1';
+              control.appendChild(span);
+            }
+
+            function displayIcon(value: string): string {
+              const cleaned = cleanReplacement(value);
+              if (normalizeIconText(cleaned) === 'close') return '×';
+              return cleaned;
+            }
+
+            function cleanReplacement(value: string) {
+              return String(value ?? '')
+                .replace(/\bicon\b/gi, '')
+                .replace(/\blike\b/gi, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            }
+
+            function normalizeIconText(value: string): string {
+              return String(value ?? '')
+                .replace(/[_-]+/g, ' ')
+                .replace(/\b(?:icon|button|btn|symbol)\b/gi, '')
+                .replace(/[#"'.]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+            }
+          },
+          args: [a],
+        });
+        const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (affected === 0) return { ok: false, error: `No elements match selector: ${a.selector}` };
+        await persistDomMutation(tabId, 'replace_selected_icon', a as unknown as Record<string, unknown>, res);
         return { ok: true, data: { affected } };
       }
 

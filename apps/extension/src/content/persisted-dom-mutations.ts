@@ -79,6 +79,9 @@ function applyMutation(mutation: PersistedDomMutation) {
     case 'replace_icon':
       applyReplaceIcon(mutation.args);
       break;
+    case 'replace_selected_icon':
+      applyReplaceSelectedIcon(mutation.args);
+      break;
   }
 }
 
@@ -311,9 +314,84 @@ function replaceControlIcon(control: HTMLElement, value: string) {
   span.style.display = 'inline-flex';
   span.style.alignItems = 'center';
   span.style.justifyContent = 'center';
+  span.style.width = '100%';
+  span.style.height = '100%';
   span.style.font = 'inherit';
+  span.style.fontWeight = '700';
   span.style.lineHeight = '1';
   control.appendChild(span);
+}
+
+function applyReplaceSelectedIcon(args: Record<string, unknown>) {
+  const selector = String(args.selector ?? '');
+  const replacement = cleanIconReplacement(String(args.replacement ?? ''));
+  if (!selector || !replacement) return;
+  const targets = Array.from(document.querySelectorAll(selector));
+  for (const target of targets) {
+    if (target instanceof SVGElement) {
+      const svg = target.tagName.toLowerCase() === 'svg' ? target : target.ownerSVGElement;
+      if (!svg) continue;
+      renderSvgIcon(svg, replacement);
+      labelIconControl(svg, replacement);
+      continue;
+    }
+    if (!(target instanceof HTMLElement)) continue;
+    const svg = target.querySelector('svg');
+    if (svg instanceof SVGElement) {
+      renderSvgIcon(svg, replacement);
+      labelIconControl(target, replacement);
+      continue;
+    }
+    replaceControlIcon(target, replacement);
+  }
+}
+
+function labelIconControl(el: Element, value: string) {
+  const control = el.closest('button,a,[role="button"],[role="link"],[aria-label],[title],[jsaction]') as HTMLElement | null;
+  const labelTarget = control ?? (el instanceof HTMLElement ? el : null);
+  if (!labelTarget) return;
+  labelTarget.dataset.hawkeyeIconReplaced = value;
+  labelTarget.setAttribute('aria-label', value);
+  labelTarget.setAttribute('title', value);
+}
+
+function renderSvgIcon(svg: SVGElement, value: string) {
+  const display = displayIcon(value);
+  const normalized = normalizeIconText(value);
+  svg.replaceChildren();
+  svg.dataset.hawkeyeIconReplacement = value;
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-label', value);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  if (!svg.getAttribute('width') && !svg.style.width) svg.setAttribute('width', '24');
+  if (!svg.getAttribute('height') && !svg.style.height) svg.setAttribute('height', '24');
+  svg.style.overflow = 'hidden';
+  svg.style.display = svg.style.display || 'inline-block';
+  svg.style.verticalAlign = svg.style.verticalAlign || 'middle';
+
+  if (['x', '×', 'close', 'remove', 'dismiss', 'clear'].includes(normalized)) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M6 6L18 18M18 6L6 18');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '2.75');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+    return;
+  }
+
+  const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  text.setAttribute('x', '12');
+  text.setAttribute('y', '12');
+  text.setAttribute('text-anchor', 'middle');
+  text.setAttribute('dominant-baseline', 'central');
+  text.setAttribute('fill', 'currentColor');
+  text.setAttribute('font-size', display.length <= 2 ? '15' : '9');
+  text.setAttribute('font-weight', '700');
+  text.textContent = display;
+  svg.appendChild(text);
 }
 
 function iconMatches(label: string, wanted: string): boolean {
@@ -358,6 +436,7 @@ function displayIcon(value: string): string {
 function cleanIconReplacement(value: string): string {
   return String(value ?? '')
     .replace(/\bicon\b/gi, '')
+    .replace(/\blike\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
