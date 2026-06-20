@@ -697,10 +697,12 @@ export async function executeTool(
         type ReplaceTextArgs = { find: string; replace: string; case_sensitive?: boolean };
         const a = args as unknown as ReplaceTextArgs;
         const res = await chrome.scripting.executeScript({
-          target: { tabId },
+          target: { tabId, allFrames: true },
           world: 'MAIN',
           func: (o: ReplaceTextArgs) => {
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            const root = document.body ?? document.documentElement;
+            if (!root) return { ok: true as const, count: 0 };
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
             const flags = o.case_sensitive ? 'g' : 'gi';
             const pattern = new RegExp(o.find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
             let count = 0;
@@ -716,9 +718,10 @@ export async function executeTool(
           },
           args: [a],
         });
-        const r = res?.[0]?.result ?? { ok: false as const, error: 'No result' };
-        if (!r.ok) return { ok: false, error: (r as any).error };
-        return { ok: true, data: { replaced: (r as any).count } };
+        const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const replaced = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        return { ok: true, data: { replaced } };
       }
 
       case 'set_css_var': {

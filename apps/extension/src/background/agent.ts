@@ -104,7 +104,10 @@ function parseDirectTextReplacement(message: string): { find: string; replace: s
 
   if (!match) return null;
 
-  const find = match[1].trim().replace(/^["'`]+|["'`]+$/g, '');
+  const find = match[1].trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/\s+(?:label|text|copy|wording)$/i, '')
+    .trim();
   const replace = match[2].trim().replace(/^["'`]+|["'`]+$/g, '');
   if (!find || !replace || find.length > 200 || replace.length > 500) return null;
 
