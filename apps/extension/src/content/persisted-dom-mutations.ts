@@ -70,6 +70,9 @@ function applyMutation(mutation: PersistedDomMutation) {
     case 'set_placeholder_by_label':
       applyPlaceholderByLabel(mutation.args);
       break;
+    case 'add_dropdown_option':
+      applyDropdownOption(mutation.args);
+      break;
     case 'set_css_var':
       applyCssVar(mutation.args);
       break;
@@ -185,6 +188,72 @@ function applyPlaceholderByLabel(args: Record<string, unknown>) {
   }
 }
 
+function applyDropdownOption(args: Record<string, unknown>) {
+  const needle = String(args.label ?? '').trim().toLowerCase()
+    .replace(/\b(?:dropdown|drop\s*down|select|field|option)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const optionLabel = String(args.optionLabel ?? '').trim();
+  const optionValue = String(args.optionValue ?? optionLabel).trim();
+  if (!needle || !optionLabel) return;
+
+  const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
+  const matches = (el: Element) => associatedControlLabel(el).includes(needle);
+
+  let matchedControl: HTMLElement | null = null;
+  for (const select of Array.from(document.querySelectorAll('select')) as HTMLSelectElement[]) {
+    if (!matches(select)) continue;
+    const exists = Array.from(select.options).some((option) =>
+      normalize(option.textContent ?? '') === normalize(optionLabel)
+      || option.value === optionValue
+    );
+    if (!exists) select.add(new Option(optionLabel, optionValue));
+    matchedControl = select;
+  }
+
+  const controls = Array.from(document.querySelectorAll('[role="combobox"],[aria-haspopup="listbox"],[aria-haspopup="menu"],button,input,.select,.dropdown,[class*="select"],[class*="dropdown"]')) as HTMLElement[];
+  for (const control of controls) {
+    if (!matches(control)) continue;
+    control.dataset.hawkeyeDropdownLabel = needle;
+    control.dataset.hawkeyeDropdownOptionLabel = optionLabel;
+    control.dataset.hawkeyeDropdownOptionValue = optionValue;
+    matchedControl = control;
+  }
+
+  const activeLabel = document.activeElement instanceof Element ? associatedControlLabel(document.activeElement) : '';
+  const expandedControl = controls.find((control) => control.getAttribute('aria-expanded') === 'true' && matches(control));
+  const shouldPatchOpenMenu = !!matchedControl || !!expandedControl || activeLabel.includes(needle);
+  if (!shouldPatchOpenMenu) return;
+
+  const menus = Array.from(document.querySelectorAll('[role="listbox"],[role="menu"],ul[class*="menu"],div[class*="menu"],div[class*="dropdown"],div[class*="option"]')) as HTMLElement[];
+  for (const menu of menus) {
+    const rect = menu.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) continue;
+    const exists = Array.from(menu.querySelectorAll('[role="option"],li,button,div,span')).some((item) =>
+      normalize(item.textContent ?? '') === normalize(optionLabel)
+    );
+    if (exists) continue;
+    const option = document.createElement(menu.tagName === 'UL' ? 'li' : 'div');
+    option.setAttribute('role', 'option');
+    option.setAttribute('data-hawkeye-added-option', 'true');
+    option.setAttribute('data-value', optionValue);
+    option.textContent = optionLabel;
+    option.style.cursor = 'pointer';
+    option.style.padding = '8px 12px';
+    option.addEventListener('click', () => {
+      const target = expandedControl ?? matchedControl ?? document.activeElement;
+      if (target instanceof HTMLInputElement) target.value = optionLabel;
+      if (target instanceof HTMLElement) {
+        if (!(target instanceof HTMLInputElement)) target.textContent = optionLabel;
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        target.dispatchEvent(new Event('change', { bubbles: true }));
+        target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      }
+    });
+    menu.appendChild(option);
+  }
+}
+
 function associatedLabel(el: HTMLInputElement | HTMLTextAreaElement): string {
   const textOf = (node: Element | null) => node?.textContent?.trim() ?? '';
   const parts: string[] = [];
@@ -198,4 +267,20 @@ function associatedLabel(el: HTMLInputElement | HTMLTextAreaElement): string {
   parts.push(textOf(el.parentElement));
   parts.push(textOf(el.closest('div, section, form, fieldset')));
   return parts.filter(Boolean).join(' ').toLowerCase();
+}
+
+function associatedControlLabel(el: Element): string {
+  const textOf = (node: Element | null) => node?.textContent?.trim() ?? '';
+  const parts: string[] = [];
+  const id = el.getAttribute('id');
+  if (id) parts.push(textOf(document.querySelector(`label[for="${CSS.escape(id)}"]`)));
+  parts.push(textOf(el.closest('label')));
+  parts.push(el.getAttribute('aria-label') ?? '');
+  parts.push(el.getAttribute('placeholder') ?? '');
+  parts.push(el.getAttribute('name') ?? '');
+  parts.push(id ?? '');
+  parts.push(textOf(el.previousElementSibling));
+  parts.push(textOf(el.parentElement));
+  parts.push(textOf(el.closest('div, section, form, fieldset')));
+  return parts.filter(Boolean).join(' ').toLowerCase().replace(/\s+/g, ' ').trim();
 }

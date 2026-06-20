@@ -35,6 +35,7 @@ const PAGE_MUTATION_TOOLS = new Set([
   'set_style',
   'style_by_text',
   'set_placeholder_by_label',
+  'add_dropdown_option',
   'insert_html',
   'set_css_var',
 ]);
@@ -50,6 +51,7 @@ Rules:
 1. For exact visible text replacement tasks ("change X text to Y", "rename X to Y"), call replace_text immediately.
 2. For color/style changes by visible text ("change Welcome color to red", "make New Customer button blue"), prefer style_by_text.
 3. For placeholder changes on inputs ("add placeholder for phone number", "set email placeholder to X"), prefer set_placeholder_by_label.
+4. For adding a new dropdown/select option ("add ROD as another option in Make field"), use add_dropdown_option.
 4. For click / fill / navigate tasks, read_page ONCE to find the right selector, then act. Do NOT call read_page more than twice.
 3. After reading, immediately execute the required tool(s). Do not pause or ask.
 4. Use CSS selectors to interact with elements.
@@ -64,6 +66,7 @@ Tool selection — pick the right one immediately:
 - Change text on a known selector → dom_op (op: set_text)
 - Change styles / colors / fonts → insert_css or set_style
 - Change an input placeholder by label/nearby text → set_placeholder_by_label
+- Add an option to a dropdown/select by label → add_dropdown_option
 - Re-theme with CSS variables → set_css_var
 - Remove elements → dom_op (op: remove)
 - Change attributes (href, placeholder, src) → dom_op (op: set_attr)
@@ -81,6 +84,8 @@ Visual / UI changes — choose the right tool:
   Example: style_by_text({ text: "New Customer", elementKind: "button", styles: { backgroundColor: "blue", borderColor: "blue", color: "#fff" } })
 - **set_placeholder_by_label**: Find a form input/textarea by its label, nearby text, aria-label, placeholder, name, or id, then set placeholder text across page and iframes.
   Example: set_placeholder_by_label({ label: "phone number", placeholder: "BLABH BLAASDA" })
+- **add_dropdown_option**: Find a native select or custom dropdown by label, nearby text, aria-label, name, or id, then add a new option across page and iframes.
+  Example: add_dropdown_option({ label: "Make", optionLabel: "ROD", optionValue: "ROD" })
 - **set_css_var**: Set a CSS custom property (design token) to re-theme sites that use variables.
   Example: set_css_var({ variable: "--primary-color", value: "#ff5722" })
 - **dom_op**: Change text/HTML content, attributes, remove elements, or toggle classes.
@@ -174,6 +179,26 @@ function parseDirectPlaceholderChange(message: string): { label: string; placeho
   return { label, placeholder };
 }
 
+function parseDirectDropdownOption(message: string): { label: string; optionLabel: string; optionValue: string } | null {
+  const normalized = message
+    .trim()
+    .replace(/^[\s"'`]*(?:can you|please|pls)\s+/i, '')
+    .replace(/\s+please[?.!]?$/i, '');
+
+  const match =
+    normalized.match(/^(?:add|insert|put)\s+(.+?)\s+(?:as\s+)?(?:an(?:other)?\s+)?option\s+(?:in|into|to|for|on)\s+(.+?)\s+(?:dropdown|drop\s*down|select|field)\b/i)
+    ?? normalized.match(/^(?:add|insert|put)\s+(?:an(?:other)?\s+)?option\s+(.+?)\s+(?:in|into|to|for|on)\s+(.+?)\s+(?:dropdown|drop\s*down|select|field)\b/i);
+
+  if (!match) return null;
+  const optionLabel = match[1].trim().replace(/^["'`]+|["'`]+$/g, '');
+  const label = cleanTargetText(match[2])
+    .replace(/\b(?:dropdown|drop\s*down|select|field|option)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!label || !optionLabel || label.length > 200 || optionLabel.length > 300) return null;
+  return { label, optionLabel, optionValue: optionLabel };
+}
+
 function looksLikeColor(value: string): boolean {
   return /^(?:#[0-9a-f]{3,8}|rgb\(|hsl\(|red|blue|green|yellow|black|white|gray|grey|orange|purple|pink|brown|cyan|magenta|lime|navy|teal|transparent)\b/i.test(value.trim());
 }
@@ -261,6 +286,30 @@ export async function runAgent(
   onStep: StepCallback,
   permissionGate: (action: string, args: Record<string, unknown>) => Promise<boolean>
 ): Promise<string> {
+  const directDropdownOption = parseDirectDropdownOption(userMessage);
+  if (directDropdownOption) {
+    onStep({
+      type: 'tool_call',
+      content: 'Calling add_dropdown_option',
+      tool: 'add_dropdown_option',
+      args: directDropdownOption,
+    });
+
+    const result = await executeTool('add_dropdown_option', directDropdownOption, tabId);
+    onStep({
+      type: 'tool_result',
+      content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+      tool: 'add_dropdown_option',
+      result: result.data ?? result.error,
+    });
+
+    if (result.ok) {
+      const count = Number((result.data as any)?.affected ?? 0);
+      return `Done. I added "${directDropdownOption.optionLabel}" to ${count || 'the'} matching dropdown${count === 1 ? '' : 's'}.`;
+    }
+    return `I could not add the dropdown option: ${result.error}`;
+  }
+
   const directPlaceholderChange = parseDirectPlaceholderChange(userMessage);
   if (directPlaceholderChange) {
     onStep({

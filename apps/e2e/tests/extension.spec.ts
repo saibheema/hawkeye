@@ -396,6 +396,8 @@ test('applies DOM modification tools inside an iframe', async ({ context, extens
         <h1 id="heading">Welcome</h1>
         <label for="phone">Mobile Phone Number</label>
         <input id="phone" name="phone" type="tel">
+        <label for="make">Make</label>
+        <select id="make" name="make"><option value="FORD">FORD</option></select>
         <button id="customer">New Customer</button>
       </body>
     </html>`;
@@ -421,11 +423,12 @@ test('applies DOM modification tools inside an iframe', async ({ context, extens
       name: 'DOM mods',
       domain: '127.0.0.1',
       createdAt: Date.now(),
-      stepCount: 3,
+      stepCount: 4,
       steps: [
         { tool: 'style_by_text', args: { text: 'Welcome', styles: { color: 'red' } } },
         { tool: 'set_placeholder_by_label', args: { label: 'phone number text box', placeholder: 'BLABH BLAASDA' } },
         { tool: 'replace_text', args: { find: 'New Customer', replace: 'Client', case_sensitive: false } },
+        { tool: 'add_dropdown_option', args: { label: 'Make', optionLabel: 'ROD', optionValue: 'ROD' } },
       ],
     };
 
@@ -435,6 +438,7 @@ test('applies DOM modification tools inside an iframe', async ({ context, extens
     await expect(frame.locator('#heading')).toHaveCSS('color', 'rgb(255, 0, 0)');
     await expect(frame.locator('#phone')).toHaveAttribute('placeholder', 'BLABH BLAASDA');
     await expect(frame.locator('#customer')).toHaveText('Client');
+    await expect(frame.locator('#make option[value="ROD"]')).toHaveText('ROD');
 
     await target.locator('#childFrame').evaluate((iframe: HTMLIFrameElement) => {
       iframe.src = 'about:blank';
@@ -447,6 +451,7 @@ test('applies DOM modification tools inside an iframe', async ({ context, extens
     await expect(frame.locator('#heading')).toHaveCSS('color', 'rgb(255, 0, 0)');
     await expect(frame.locator('#phone')).toHaveAttribute('placeholder', 'BLABH BLAASDA');
     await expect(frame.locator('#customer')).toHaveText('Client');
+    await expect(frame.locator('#make option[value="ROD"]')).toHaveText('ROD');
 
     await extensionPage.close();
     await target.close();
@@ -698,6 +703,56 @@ test('live Avis Ford keeps DOM modifications after scheduler back navigation', a
   frame = await waitForScheduler();
   await expect(frame.getByText('Client', { exact: true })).toBeVisible({ timeout: 15_000 });
   await expect(frame.getByText('Welcome', { exact: true })).toHaveCSS('color', 'rgb(255, 0, 0)');
+
+  await extensionPage.close();
+  await target.close();
+});
+
+test('live Avis Ford adds an option to the Make dropdown', async ({
+  context,
+  extensionId,
+}) => {
+  test.skip(
+    process.env.HAWKEYE_LIVE_AVISFORD !== '1',
+    'Set HAWKEYE_LIVE_AVISFORD=1 to run the guarded live Avis Ford scheduler test.'
+  );
+  test.setTimeout(90_000);
+
+  const target = await context.newPage();
+  await target.goto('https://www.avisford.com/service-appointment.aspx', {
+    waitUntil: 'domcontentloaded',
+    timeout: 60_000,
+  });
+  await target.waitForTimeout(5_000);
+
+  const allowCookies = target.getByText('Allow all cookies', { exact: true });
+  if (await allowCookies.count()) {
+    await allowCookies.click().catch(() => {});
+    await target.waitForTimeout(3_000);
+  }
+
+  const extensionPage = await context.newPage();
+  await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+  const tabId = await getTabId(extensionPage, 'https://www.avisford.com/service-appointment.aspx');
+  const frame = target.frames().find((f) => f.url().includes('guestxpui.ford.com'));
+  if (!frame) throw new Error('Avis Ford scheduler iframe not found');
+
+  await frame.getByText(/New Customer|Client/, { exact: false }).click();
+  await expect(frame.locator('#make-input')).toBeVisible({ timeout: 15_000 });
+
+  const flow = {
+    id: 'avis_make_option',
+    name: 'Avis Make option',
+    domain: 'www.avisford.com',
+    createdAt: Date.now(),
+    stepCount: 1,
+    steps: [
+      { tool: 'add_dropdown_option', args: { label: 'Make', optionLabel: 'ROD', optionValue: 'ROD' } },
+    ],
+  };
+  const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+  expect(results[0].ok).toBe(true);
+  await expect(frame.locator('#make-input option[value="ROD"]')).toHaveText('ROD');
 
   await extensionPage.close();
   await target.close();

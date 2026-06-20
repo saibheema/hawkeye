@@ -74,6 +74,19 @@ export const TOOLS: LLMTool[] = [
     },
   },
   {
+    name: 'add_dropdown_option',
+    description: 'Add a temporary option to a native <select> or custom dropdown/combobox by label or nearby text. Works across the page and iframes. Use for requests like "add ROD as another option in Make field".',
+    parameters: {
+      type: 'object',
+      properties: {
+        label: { type: 'string', description: 'Label or nearby text identifying the dropdown, e.g. "Make", "Year", or "Vehicle Type".' },
+        optionLabel: { type: 'string', description: 'Visible option text to add, e.g. "ROD".' },
+        optionValue: { type: 'string', description: 'Option value to add. Defaults to optionLabel.' },
+      },
+      required: ['label', 'optionLabel'],
+    },
+  },
+  {
     name: 'scroll',
     description: 'Scroll the page or a specific element into view',
     parameters: {
@@ -387,6 +400,107 @@ export async function executeTool(
         return res.ok
           ? { ok: true, data: { selected: args.value } }
           : { ok: false, error: res.error };
+      }
+
+      case 'add_dropdown_option': {
+        type AddDropdownOptionArgs = { label: string; optionLabel: string; optionValue?: string };
+        const a = args as unknown as AddDropdownOptionArgs;
+        const res = await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          world: 'MAIN',
+          func: (o: AddDropdownOptionArgs) => {
+            const needle = o.label.trim().toLowerCase()
+              .replace(/\b(?:dropdown|drop\s*down|select|field|option)\b/g, '')
+              .replace(/\s+/g, ' ')
+              .trim();
+            const optionLabel = o.optionLabel.trim();
+            const optionValue = (o.optionValue ?? o.optionLabel).trim();
+            if (!needle || !optionLabel) return { ok: true as const, count: 0, frameUrl: location.href };
+
+            const textOf = (node: Element | null): string => node?.textContent?.trim() ?? '';
+            const normalize = (value: string): string => value.toLowerCase().replace(/\s+/g, ' ').trim();
+            const labelFor = (el: Element): string => {
+              const parts: string[] = [];
+              const id = el.getAttribute('id');
+              if (id) parts.push(textOf(document.querySelector(`label[for="${CSS.escape(id)}"]`)));
+              parts.push(textOf(el.closest('label')));
+              parts.push(el.getAttribute('aria-label') ?? '');
+              parts.push(el.getAttribute('placeholder') ?? '');
+              parts.push(el.getAttribute('name') ?? '');
+              parts.push(id ?? '');
+              parts.push(textOf(el.previousElementSibling));
+              parts.push(textOf(el.parentElement));
+              parts.push(textOf(el.closest('div, section, form, fieldset')));
+              return normalize(parts.filter(Boolean).join(' '));
+            };
+            const matchesLabel = (el: Element) => labelFor(el).includes(needle);
+            let count = 0;
+
+            for (const select of Array.from(document.querySelectorAll('select')) as HTMLSelectElement[]) {
+              if (!matchesLabel(select)) continue;
+              const exists = Array.from(select.options).some((option) =>
+                normalize(option.textContent ?? '') === normalize(optionLabel)
+                || option.value === optionValue
+              );
+              if (!exists) select.add(new Option(optionLabel, optionValue));
+              select.dispatchEvent(new Event('input', { bubbles: true }));
+              select.dispatchEvent(new Event('change', { bubbles: true }));
+              count++;
+            }
+
+            const controls = Array.from(document.querySelectorAll('[role="combobox"],[aria-haspopup="listbox"],[aria-haspopup="menu"],button,input,.select,.dropdown,[class*="select"],[class*="dropdown"]')) as HTMLElement[];
+            for (const control of controls) {
+              if (!matchesLabel(control)) continue;
+              control.dataset.hawkeyeDropdownLabel = needle;
+              control.dataset.hawkeyeDropdownOptionLabel = optionLabel;
+              control.dataset.hawkeyeDropdownOptionValue = optionValue;
+              count++;
+            }
+
+            const activeLabel = document.activeElement instanceof Element ? labelFor(document.activeElement) : '';
+            const expandedControl = controls.find((control) => control.getAttribute('aria-expanded') === 'true' && matchesLabel(control));
+            const shouldPatchOpenMenu = activeLabel.includes(needle) || !!expandedControl || count > 0;
+            if (shouldPatchOpenMenu) {
+              const menus = Array.from(document.querySelectorAll('[role="listbox"],[role="menu"],ul[class*="menu"],div[class*="menu"],div[class*="dropdown"],div[class*="option"]')) as HTMLElement[];
+              for (const menu of menus) {
+                const rect = menu.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0) continue;
+                const exists = Array.from(menu.querySelectorAll('[role="option"],li,button,div,span')).some((item) =>
+                  normalize(item.textContent ?? '') === normalize(optionLabel)
+                );
+                if (exists) continue;
+                const option = document.createElement(menu.tagName === 'UL' ? 'li' : 'div');
+                option.setAttribute('role', 'option');
+                option.setAttribute('data-hawkeye-added-option', 'true');
+                option.setAttribute('data-value', optionValue);
+                option.textContent = optionLabel;
+                option.style.cursor = 'pointer';
+                option.style.padding = '8px 12px';
+                option.addEventListener('click', () => {
+                  const target = expandedControl ?? document.activeElement;
+                  if (target instanceof HTMLInputElement) target.value = optionLabel;
+                  if (target instanceof HTMLElement) {
+                    target.textContent = target instanceof HTMLInputElement ? target.value : optionLabel;
+                    target.dispatchEvent(new Event('input', { bubbles: true }));
+                    target.dispatchEvent(new Event('change', { bubbles: true }));
+                    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                  }
+                });
+                menu.appendChild(option);
+                count++;
+              }
+            }
+
+            return { ok: true as const, count, frameUrl: location.href };
+          },
+          args: [a],
+        });
+        const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (affected === 0) return { ok: false, error: `No dropdown matched label: ${a.label}` };
+        await persistDomMutation(tabId, 'add_dropdown_option', a as unknown as Record<string, unknown>, res);
+        return { ok: true, data: { affected, optionLabel: a.optionLabel } };
       }
 
       case 'scroll': {
