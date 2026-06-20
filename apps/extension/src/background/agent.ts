@@ -102,8 +102,9 @@ Never use eval or new Function for any DOM or style manipulation.
 
 Iframe handling:
 - Many forms on dealership and booking sites are embedded in an <iframe>.
-- When read_page shows an <iframe> element, use read_page with iframe_selector to inspect its contents first.
-- Then use click/type_text/select_option with the same iframe_selector to interact with elements inside it.
+- read_page returns elements from the top page and accessible iframes. If an element includes frameId, pass that frameId to click/type_text/select_option/query_element.
+- When read_page shows an iframe but not its inner elements, use read_page with iframe_selector to inspect its contents first.
+- Then use click/type_text/select_option with frameId or the same iframe_selector to interact with elements inside it.
 - Example: click({ selector: 'button[name="Continue"]', iframe_selector: 'iframe[title="service reservation form"]' })`;
 
 function parseDirectTextReplacement(message: string): { find: string; replace: string } | null {

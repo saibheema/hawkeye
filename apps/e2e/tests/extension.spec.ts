@@ -353,6 +353,58 @@ test('replays recorded actions inside an iframe', async ({ context, extensionId 
   });
 });
 
+test('applies DOM modification tools inside an iframe', async ({ context, extensionId }) => {
+  const frameHtml = `<!doctype html>
+    <html>
+      <body>
+        <h1 id="heading">Welcome</h1>
+        <label for="phone">Mobile Phone Number</label>
+        <input id="phone" name="phone" type="tel">
+        <button id="customer">New Customer</button>
+      </body>
+    </html>`;
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <iframe id="childFrame" src="/frame"></iframe>
+      </body>
+    </html>`;
+
+  await withTestServer((req) => req.url === '/frame' ? frameHtml : html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    const frame = target.frameLocator('#childFrame');
+    await frame.locator('#customer').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    const flow = {
+      id: 'flow_dom_mods',
+      name: 'DOM mods',
+      domain: '127.0.0.1',
+      createdAt: Date.now(),
+      stepCount: 3,
+      steps: [
+        { tool: 'style_by_text', args: { text: 'Welcome', styles: { color: 'red' } } },
+        { tool: 'set_placeholder_by_label', args: { label: 'phone number text box', placeholder: 'BLABH BLAASDA' } },
+        { tool: 'replace_text', args: { find: 'New Customer', replace: 'Client', case_sensitive: false } },
+      ],
+    };
+
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results).toHaveLength(1);
+    expect(results[0].ok).toBe(true);
+    await expect(frame.locator('#heading')).toHaveCSS('color', 'rgb(255, 0, 0)');
+    await expect(frame.locator('#phone')).toHaveAttribute('placeholder', 'BLABH BLAASDA');
+    await expect(frame.locator('#customer')).toHaveText('Client');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('live Avis Ford scheduler records through contact screen without booking', async ({
   context,
   extensionId,

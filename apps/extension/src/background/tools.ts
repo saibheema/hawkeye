@@ -33,6 +33,7 @@ export const TOOLS: LLMTool[] = [
       properties: {
         selector: { type: 'string', description: 'CSS selector of the element to click' },
         iframe_selector: { type: 'string', description: 'CSS selector of the <iframe> that contains the target (optional)' },
+        frameId: { type: 'number', description: 'Chrome frameId from read_page for iframe targets (optional).' },
       },
       required: ['selector'],
     },
@@ -46,6 +47,7 @@ export const TOOLS: LLMTool[] = [
         selector: { type: 'string', description: 'CSS selector of the input field' },
         text: { type: 'string', description: 'Text to type into the field' },
         iframe_selector: { type: 'string', description: 'CSS selector of the <iframe> that contains the target (optional)' },
+        frameId: { type: 'number', description: 'Chrome frameId from read_page for iframe targets (optional).' },
       },
       required: ['selector', 'text'],
     },
@@ -59,6 +61,7 @@ export const TOOLS: LLMTool[] = [
         selector: { type: 'string', description: 'CSS selector of the select element' },
         value: { type: 'string', description: 'Option value to select' },
         iframe_selector: { type: 'string', description: 'CSS selector of the <iframe> that contains the target (optional)' },
+        frameId: { type: 'number', description: 'Chrome frameId from read_page for iframe targets (optional).' },
       },
       required: ['selector', 'value'],
     },
@@ -104,6 +107,7 @@ export const TOOLS: LLMTool[] = [
       properties: {
         selector: { type: 'string', description: 'CSS selector to query' },
         iframe_selector: { type: 'string', description: 'CSS selector of the <iframe> that contains the target (optional)' },
+        frameId: { type: 'number', description: 'Chrome frameId from read_page for iframe targets (optional).' },
       },
       required: ['selector'],
     },
@@ -431,7 +435,7 @@ export async function executeTool(
         let results;
         try {
           results = await chrome.scripting.executeScript({
-            target: { tabId },
+            target: { tabId, allFrames: true },
             world: 'MAIN',
           func: (rootSel?: string) => {
             const root = rootSel ? (document.querySelector(rootSel) ?? document.body) : document.body;
@@ -470,6 +474,7 @@ export async function executeTool(
                 elements.push({
                   tag: node.tagName.toLowerCase(),
                   selector: getSelector(node),
+                  frameUrl: location.href,
                   text: node.textContent?.trim().slice(0, 120) ?? '',
                   type: (node as HTMLInputElement).type ?? '',
                   name: (node as HTMLInputElement).name ?? '',
@@ -498,6 +503,7 @@ export async function executeTool(
               action: form.action || null,
               method: form.method || 'get',
               selector: getSelector(form),
+              frameUrl: location.href,
               fields: Array.from(form.elements)
                 .filter(el => (el as HTMLInputElement).name)
                 .map(el => ({
@@ -521,6 +527,7 @@ export async function executeTool(
               ok: true,
               url: location.href,
               title: document.title,
+              frameUrl: location.href,
               elements,
               textSections,
               forms,
@@ -536,9 +543,29 @@ export async function executeTool(
           return { ok: true, data: { url: '', title: '', elements: [], textSections: [], forms: [], iframes: [], interactiveCount: 0, warning: `read_page unavailable: ${e?.message ?? e}` } };
         }
 
-        const analysis = results?.[0]?.result;
+        const frameAnalyses = (results ?? [])
+          .map((entry) => entry.result ? { ...(entry.result as any), frameId: entry.frameId } : null)
+          .filter(Boolean);
+        const analysis = frameAnalyses[0];
         if (!analysis) return { ok: false, error: 'Could not analyze page — scripting permission may not cover this URL' };
-        return { ok: true, data: analysis };
+        return {
+          ok: true,
+          data: {
+            ...analysis,
+            elements: frameAnalyses.flatMap((frame: any) => (frame.elements ?? []).map((el: any) => ({ ...el, frameId: frame.frameId }))),
+            textSections: frameAnalyses.flatMap((frame: any) => (frame.textSections ?? []).map((section: any) => ({ ...section, frameId: frame.frameId, frameUrl: frame.frameUrl }))),
+            forms: frameAnalyses.flatMap((frame: any) => (frame.forms ?? []).map((form: any) => ({ ...form, frameId: frame.frameId }))),
+            frames: frameAnalyses.map((frame: any) => ({
+              frameId: frame.frameId,
+              url: frame.url,
+              title: frame.title,
+              elementCount: frame.elements?.length ?? 0,
+              textCount: frame.textSections?.length ?? 0,
+              formCount: frame.forms?.length ?? 0,
+            })),
+            interactiveCount: frameAnalyses.reduce((sum: number, frame: any) => sum + (frame.interactiveCount ?? 0), 0),
+          },
+        };
       }
 
       case 'wait': {
@@ -577,8 +604,24 @@ export async function executeTool(
             }, args.selector as string);
           return { ok: true, data: res };
         }
-        const res = await sendToContent(tabId, { type: 'DOM_QUERY', payload: { selector: args.selector } });
-        return { ok: true, data: res };
+        const res = await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          world: 'MAIN',
+          func: (sel: string) => {
+            const el = document.querySelector(sel) as HTMLInputElement | null;
+            return {
+              found: !!el,
+              tagName: el?.tagName ?? null,
+              value: el?.value ?? null,
+              text: el?.textContent?.slice(0, 200) ?? null,
+              disabled: el ? (el as HTMLInputElement).disabled : null,
+              frameUrl: location.href,
+            };
+          },
+          args: [args.selector as string],
+        });
+        const match = res.find((frameResult) => (frameResult.result as any)?.found);
+        return { ok: true, data: match?.result ?? { found: false } };
       }
 
       case 'dom_op': {
@@ -881,21 +924,22 @@ export async function executeTool(
         type SetCssVarArgs = { variable: string; value: string; selector?: string };
         const a = args as unknown as SetCssVarArgs;
         const res = await chrome.scripting.executeScript({
-          target: { tabId },
+          target: { tabId, allFrames: true },
           world: 'MAIN',
           func: (o: SetCssVarArgs) => {
-            const target = o.selector
-              ? document.querySelector(o.selector) as HTMLElement | null
-              : document.documentElement;
-            if (!target) return { ok: false, error: `Not found: ${o.selector}` };
-            target.style.setProperty(o.variable, o.value);
-            return { ok: true };
+            const targets = o.selector
+              ? Array.from(document.querySelectorAll(o.selector)) as HTMLElement[]
+              : [document.documentElement];
+            for (const target of targets) target.style.setProperty(o.variable, o.value);
+            return { ok: true, count: targets.length };
           },
           args: [a],
         });
-        const r = res?.[0]?.result ?? { ok: false, error: 'No result' };
-        if (!r.ok) return { ok: false, error: r.error };
-        return { ok: true, data: { set: args.variable, to: args.value } };
+        const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (affected === 0) return { ok: false, error: `No elements match selector: ${a.selector}` };
+        return { ok: true, data: { set: args.variable, to: args.value, affected } };
       }
 
       default:
