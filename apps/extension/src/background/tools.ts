@@ -180,6 +180,18 @@ export const TOOLS: LLMTool[] = [
     },
   },
   {
+    name: 'set_placeholder_by_label',
+    description: 'Find an input or textarea by label, nearby text, aria-label, placeholder, name, or id, then set its placeholder. Works across the page and iframes. Use for requests like "add placeholder for phone number textbox".',
+    parameters: {
+      type: 'object',
+      properties: {
+        label: { type: 'string', description: 'Label or nearby text identifying the field, e.g. "phone number" or "email".' },
+        placeholder: { type: 'string', description: 'Placeholder text to set.' },
+      },
+      required: ['label', 'placeholder'],
+    },
+  },
+  {
     name: 'insert_html',
     description: 'Insert new HTML content relative to a target element. Use to add banners, badges, tooltips, buttons, or any new DOM nodes without replacing existing content.',
     parameters: {
@@ -788,6 +800,56 @@ export async function executeTool(
               }
               count++;
               if (o.elementKind !== 'button') break;
+            }
+            return { ok: true as const, count };
+          },
+          args: [a],
+        });
+        const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        return { ok: true, data: { affected } };
+      }
+
+      case 'set_placeholder_by_label': {
+        type PlaceholderArgs = { label: string; placeholder: string };
+        const a = args as unknown as PlaceholderArgs;
+        const res = await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          world: 'MAIN',
+          func: (o: PlaceholderArgs) => {
+            const needle = o.label.trim().toLowerCase();
+            if (!needle) return { ok: true as const, count: 0 };
+
+            function textOf(el: Element | null): string {
+              return el?.textContent?.trim() ?? '';
+            }
+
+            function associatedLabel(el: HTMLInputElement | HTMLTextAreaElement): string {
+              const parts: string[] = [];
+              if (el.id) parts.push(textOf(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)));
+              parts.push(textOf(el.closest('label')));
+              parts.push(el.getAttribute('aria-label') ?? '');
+              parts.push(el.getAttribute('placeholder') ?? '');
+              parts.push(el.name ?? '');
+              parts.push(el.id ?? '');
+              parts.push(textOf(el.previousElementSibling));
+              parts.push(textOf(el.parentElement));
+              parts.push(textOf(el.closest('div, section, form, fieldset')));
+              return parts.filter(Boolean).join(' ').toLowerCase();
+            }
+
+            const fields = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea')) as Array<HTMLInputElement | HTMLTextAreaElement>;
+            let count = 0;
+            for (const field of fields) {
+              const type = field instanceof HTMLInputElement ? field.type : 'textarea';
+              if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image'].includes(type)) continue;
+              const haystack = associatedLabel(field);
+              if (!haystack.includes(needle)) continue;
+              field.setAttribute('placeholder', o.placeholder);
+              field.dispatchEvent(new Event('input', { bubbles: true }));
+              field.dispatchEvent(new Event('change', { bubbles: true }));
+              count++;
             }
             return { ok: true as const, count };
           },

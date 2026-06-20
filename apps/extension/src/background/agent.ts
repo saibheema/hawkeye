@@ -28,16 +28,6 @@ export type AgentHistoryMessage = { role: 'user' | 'agent'; text: string };
 const REQUIRES_PERMISSION = new Set(['navigate']);
 
 const MAX_ITERATIONS = 10;
-const PAGE_MODIFICATION_TOOLS = new Set([
-  'replace_text',
-  'dom_op',
-  'insert_css',
-  'set_style',
-  'style_by_text',
-  'insert_html',
-  'set_css_var',
-]);
-
 const SYSTEM_PROMPT = `You are Hawkeye, an expert browser automation AI.
 You have access to tools to interact with the current web page.
 Your job is to complete the user's task precisely and efficiently.
@@ -49,7 +39,8 @@ If the request is clear, execute it immediately with the best tool. If the reque
 Rules:
 1. For exact visible text replacement tasks ("change X text to Y", "rename X to Y"), call replace_text immediately.
 2. For color/style changes by visible text ("change Welcome color to red", "make New Customer button blue"), prefer style_by_text.
-3. For click / fill / navigate tasks, read_page ONCE to find the right selector, then act. Do NOT call read_page more than twice.
+3. For placeholder changes on inputs ("add placeholder for phone number", "set email placeholder to X"), prefer set_placeholder_by_label.
+4. For click / fill / navigate tasks, read_page ONCE to find the right selector, then act. Do NOT call read_page more than twice.
 3. After reading, immediately execute the required tool(s). Do not pause or ask.
 4. Use CSS selectors to interact with elements.
 5. After each action, verify the result with get_property or query_element if needed.
@@ -62,6 +53,7 @@ Tool selection — pick the right one immediately:
 - Change color/style of visible text, labels, headings, or buttons → style_by_text
 - Change text on a known selector → dom_op (op: set_text)
 - Change styles / colors / fonts → insert_css or set_style
+- Change an input placeholder by label/nearby text → set_placeholder_by_label
 - Re-theme with CSS variables → set_css_var
 - Remove elements → dom_op (op: remove)
 - Change attributes (href, placeholder, src) → dom_op (op: set_attr)
@@ -77,6 +69,8 @@ Visual / UI changes — choose the right tool:
 - **style_by_text**: Find visible elements by their text and apply inline styles across the page and iframes.
   Example: style_by_text({ text: "Welcome", styles: { color: "red" } })
   Example: style_by_text({ text: "New Customer", elementKind: "button", styles: { backgroundColor: "blue", borderColor: "blue", color: "#fff" } })
+- **set_placeholder_by_label**: Find a form input/textarea by its label, nearby text, aria-label, placeholder, name, or id, then set placeholder text across page and iframes.
+  Example: set_placeholder_by_label({ label: "phone number", placeholder: "BLABH BLAASDA" })
 - **set_css_var**: Set a CSS custom property (design token) to re-theme sites that use variables.
   Example: set_css_var({ variable: "--primary-color", value: "#ff5722" })
 - **dom_op**: Change text/HTML content, attributes, remove elements, or toggle classes.
@@ -325,12 +319,6 @@ export async function runAgent(
       });
 
       toolResultParts.push(`Tool ${name} result: ${resultStr}`);
-
-      if (result.ok && PAGE_MODIFICATION_TOOLS.has(name)) {
-        const answer = `Done. I applied the requested page change using ${name}.`;
-        onStep({ type: 'answer', content: answer });
-        return answer;
-      }
     }
 
     // Feed tool results back to LLM
