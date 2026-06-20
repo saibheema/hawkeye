@@ -405,6 +405,58 @@ test('applies DOM modification tools inside an iframe', async ({ context, extens
   });
 });
 
+test('applies attribute changes inside and outside an iframe', async ({ context, extensionId }) => {
+  const frameHtml = `<!doctype html>
+    <html>
+      <body>
+        <label for="frameInput">Frame field</label>
+        <input id="frameInput" name="frameInput">
+        <button id="frameButton" disabled>Frame Button</button>
+      </body>
+    </html>`;
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <button id="topButton">Top Button</button>
+        <iframe id="childFrame" src="/frame"></iframe>
+      </body>
+    </html>`;
+
+  await withTestServer((req) => req.url === '/frame' ? frameHtml : html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    const frame = target.frameLocator('#childFrame');
+    await frame.locator('#frameButton').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    const flow = {
+      id: 'flow_attr_mods',
+      name: 'Attribute mods',
+      domain: '127.0.0.1',
+      createdAt: Date.now(),
+      stepCount: 3,
+      steps: [
+        { tool: 'dom_op', args: { op: 'set_attr', selector: '#topButton', attr: 'data-hawkeye-test', value: 'top-updated' } },
+        { tool: 'dom_op', args: { op: 'set_attr', selector: '#frameInput', attr: 'placeholder', value: 'Frame placeholder' } },
+        { tool: 'dom_op', args: { op: 'remove_attr', selector: '#frameButton', attr: 'disabled' } },
+      ],
+    };
+
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results).toHaveLength(1);
+    expect(results[0].ok).toBe(true);
+    await expect(target.locator('#topButton')).toHaveAttribute('data-hawkeye-test', 'top-updated');
+    await expect(frame.locator('#frameInput')).toHaveAttribute('placeholder', 'Frame placeholder');
+    await expect(frame.locator('#frameButton')).not.toBeDisabled();
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('live Avis Ford scheduler records through contact screen without booking', async ({
   context,
   extensionId,
