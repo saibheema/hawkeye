@@ -923,16 +923,45 @@ export async function executeTool(
           func: (o: ReplaceTextArgs) => {
             const root = document.body ?? document.documentElement;
             if (!root) return { ok: true as const, count: 0 };
-            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
             const flags = o.case_sensitive ? 'g' : 'gi';
-            const pattern = new RegExp(o.find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+            const escapedFind = o.find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const replaceValue = (value: string | null | undefined) => {
+              if (!value) return null;
+              const testPattern = new RegExp(escapedFind, flags);
+              if (!testPattern.test(value)) return null;
+              return value.replace(new RegExp(escapedFind, flags), o.replace);
+            };
             let count = 0;
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
             let node: Text | null;
             while ((node = walker.nextNode() as Text | null)) {
               if (node.parentElement?.tagName === 'SCRIPT' || node.parentElement?.tagName === 'STYLE') continue;
-              if (pattern.test(node.textContent ?? '')) {
-                node.textContent = (node.textContent ?? '').replace(pattern, o.replace);
+              const nextText = replaceValue(node.textContent);
+              if (nextText !== null) {
+                node.textContent = nextText;
                 count++;
+              }
+            }
+            const candidates = Array.from(root.querySelectorAll(
+              'input,textarea,button,option,optgroup,[role="button"],[aria-label],[title],[value]'
+            )) as HTMLElement[];
+            for (const el of candidates) {
+              const input = el as HTMLInputElement | HTMLTextAreaElement;
+              if ('value' in input) {
+                const nextValue = replaceValue(input.value);
+                if (nextValue !== null && nextValue !== input.value) {
+                  input.value = nextValue;
+                  count++;
+                }
+              }
+              for (const attr of ['value', 'aria-label', 'title', 'alt']) {
+                if (!el.hasAttribute(attr)) continue;
+                const current = el.getAttribute(attr);
+                const nextAttr = replaceValue(current);
+                if (nextAttr !== null && nextAttr !== current) {
+                  el.setAttribute(attr, nextAttr);
+                  count++;
+                }
               }
             }
             return { ok: true as const, count, frameUrl: location.href };

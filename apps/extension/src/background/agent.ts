@@ -122,7 +122,12 @@ function parseDirectTextReplacement(message: string): { find: string; replace: s
     .replace(/^[\s"'`]*(?:can you|please|pls)\s+/i, '')
     .replace(/^(?:change|replace|rename|text)\s*[-:]?\s+/i, '');
 
-  const match = normalized.match(/^["'`]?(.+?)["'`]?\s+(?:to|with|as)\s+["'`](.+?)["'`]$/i)
+  const explicitLabelMatch =
+    normalized.match(/^(?:(?:the\s+)?(?:bu+t+on|button|link)\s+)?(?:label|text|copy|wording)\s+["'`](.+?)["'`]\s+(?:to|with|as)\s+["'`](.+?)["'`]$/i)
+    ?? normalized.match(/^(?:the\s+)?(?:bu+t+on|button|link)\s+["'`](.+?)["'`]\s+(?:label|text|copy|wording)?\s*(?:to|with|as)\s+["'`](.+?)["'`]$/i);
+
+  const match = explicitLabelMatch
+    ?? normalized.match(/^["'`]?(.+?)["'`]?\s+(?:to|with|as)\s+["'`](.+?)["'`]$/i)
     ?? normalized.match(/^["'`]?(.+?)["'`]?\s+(?:to|with|as)\s+(.+?)$/i);
 
   if (!match) return null;
@@ -204,13 +209,18 @@ function looksLikeColor(value: string): boolean {
 }
 
 function cleanTargetText(value: string): string {
-  let cleaned = value.trim().replace(/^["'`]+|["'`]+$/g, '');
+  let cleaned = value
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/^[\s"'`]*(?:the\s+)?(?:(?:bu+t+on|button|link|field|input)\s+)?(?:label|text|copy|wording)\s+["'`]*/i, '')
+    .replace(/^[\s"'`]*(?:the\s+)?(?:bu+t+on|button|link)\s+["'`]*/i, '');
   let previous = '';
   while (cleaned !== previous) {
     previous = cleaned;
     cleaned = cleaned
-      .replace(/\s+(?:button|link|field|input|label|text|copy|wording)$/i, '')
-      .replace(/\s+(?:button|link|field|input)\s+(?:label|text|copy|wording)$/i, '')
+      .replace(/\s+(?:bu+t+on|button|link|field|input|label|text|copy|wording)$/i, '')
+      .replace(/\s+(?:bu+t+on|button|link|field|input)\s+(?:label|text|copy|wording)$/i, '')
+      .replace(/^["'`]+|["'`]+$/g, '')
       .trim();
   }
   return cleaned;

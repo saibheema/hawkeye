@@ -128,13 +128,40 @@ function applyReplaceText(args: Record<string, unknown>) {
   const root = document.body ?? document.documentElement;
   if (!root) return;
   const flags = args.case_sensitive ? 'g' : 'gi';
-  const pattern = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+  const escapedFind = find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const replaceValue = (value: string | null | undefined) => {
+    if (!value) return null;
+    const testPattern = new RegExp(escapedFind, flags);
+    if (!testPattern.test(value)) return null;
+    return value.replace(new RegExp(escapedFind, flags), replace);
+  };
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node: Text | null;
   while ((node = walker.nextNode() as Text | null)) {
     if (node.parentElement?.tagName === 'SCRIPT' || node.parentElement?.tagName === 'STYLE') continue;
-    if (pattern.test(node.textContent ?? '')) {
-      node.textContent = (node.textContent ?? '').replace(pattern, replace);
+    const nextText = replaceValue(node.textContent);
+    if (nextText !== null) {
+      node.textContent = nextText;
+    }
+  }
+  const candidates = Array.from(root.querySelectorAll(
+    'input,textarea,button,option,optgroup,[role="button"],[aria-label],[title],[value]'
+  )) as HTMLElement[];
+  for (const el of candidates) {
+    const input = el as HTMLInputElement | HTMLTextAreaElement;
+    if ('value' in input) {
+      const nextValue = replaceValue(input.value);
+      if (nextValue !== null && nextValue !== input.value) {
+        input.value = nextValue;
+      }
+    }
+    for (const attr of ['value', 'aria-label', 'title', 'alt']) {
+      if (!el.hasAttribute(attr)) continue;
+      const current = el.getAttribute(attr);
+      const nextAttr = replaceValue(current);
+      if (nextAttr !== null && nextAttr !== current) {
+        el.setAttribute(attr, nextAttr);
+      }
     }
   }
 }

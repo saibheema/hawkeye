@@ -480,6 +480,7 @@ test('applies DOM modification tools inside an iframe', async ({ context, extens
         <label for="make">Make</label>
         <select id="make" name="make"><option value="FORD">FORD</option></select>
         <button id="customer">New Customer</button>
+        <input id="searchButton" type="submit" value="Google Search" aria-label="Google Search">
       </body>
     </html>`;
   const html = `<!doctype html>
@@ -504,11 +505,12 @@ test('applies DOM modification tools inside an iframe', async ({ context, extens
       name: 'DOM mods',
       domain: '127.0.0.1',
       createdAt: Date.now(),
-      stepCount: 4,
+      stepCount: 5,
       steps: [
         { tool: 'style_by_text', args: { text: 'Welcome', styles: { color: 'red' } } },
         { tool: 'set_placeholder_by_label', args: { label: 'phone number text box', placeholder: 'BLABH BLAASDA' } },
         { tool: 'replace_text', args: { find: 'New Customer', replace: 'Client', case_sensitive: false } },
+        { tool: 'replace_text', args: { find: 'Google Search', replace: 'Gokul Search', case_sensitive: false } },
         { tool: 'add_dropdown_option', args: { label: 'Make', optionLabel: 'ROD', optionValue: 'ROD' } },
       ],
     };
@@ -519,6 +521,8 @@ test('applies DOM modification tools inside an iframe', async ({ context, extens
     await expect(frame.locator('#heading')).toHaveCSS('color', 'rgb(255, 0, 0)');
     await expect(frame.locator('#phone')).toHaveAttribute('placeholder', 'BLABH BLAASDA');
     await expect(frame.locator('#customer')).toHaveText('Client');
+    await expect(frame.locator('#searchButton')).toHaveValue('Gokul Search');
+    await expect(frame.locator('#searchButton')).toHaveAttribute('aria-label', 'Gokul Search');
     await expect(frame.locator('#make option[value="ROD"]')).toHaveText('ROD');
 
     await target.locator('#childFrame').evaluate((iframe: HTMLIFrameElement) => {
@@ -532,6 +536,8 @@ test('applies DOM modification tools inside an iframe', async ({ context, extens
     await expect(frame.locator('#heading')).toHaveCSS('color', 'rgb(255, 0, 0)');
     await expect(frame.locator('#phone')).toHaveAttribute('placeholder', 'BLABH BLAASDA');
     await expect(frame.locator('#customer')).toHaveText('Client');
+    await expect(frame.locator('#searchButton')).toHaveValue('Gokul Search');
+    await expect(frame.locator('#searchButton')).toHaveAttribute('aria-label', 'Gokul Search');
     await expect(frame.locator('#make option[value="ROD"]')).toHaveText('ROD');
 
     await extensionPage.close();
@@ -622,6 +628,45 @@ test('agent direct placeholder command does not fall back to text replacement', 
     expect(response?.started).toBe(true);
 
     await expect(target.locator('#phone')).toHaveAttribute('placeholder', 'BLACK SHEEP');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
+test('agent direct button label command updates input button values', async ({ context, extensionId }) => {
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <form>
+          <input id="searchButton" type="submit" value="Google Search" aria-label="Google Search">
+        </form>
+      </body>
+    </html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    await target.locator('#searchButton').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    const response = await sendExtensionMessage(extensionPage, {
+      type: 'AGENT_RUN',
+      tabId,
+      payload: {
+        task: 'change buutton label "Google search" to "Gokul Search"',
+        history: [],
+        apiKey: 'not-needed-for-direct-button-label',
+        provider: 'gemini',
+      },
+    });
+    expect(response?.started).toBe(true);
+
+    await expect(target.locator('#searchButton')).toHaveValue('Gokul Search');
+    await expect(target.locator('#searchButton')).toHaveAttribute('aria-label', 'Gokul Search');
 
     await extensionPage.close();
     await target.close();
