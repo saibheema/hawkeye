@@ -321,6 +321,12 @@ function compactPageContext(data: unknown): string {
   });
 }
 
+function shouldUseDirectShortcuts(config: AgentConfig): boolean {
+  // Production sessions should let the LLM choose tools. These shortcuts are
+  // retained only for deterministic tests/offline direct-tool validation.
+  return config.apiKey.startsWith('not-needed-for-direct');
+}
+
 export async function runAgent(
   userMessage: string,
   tabId: number,
@@ -329,161 +335,163 @@ export async function runAgent(
   onStep: StepCallback,
   permissionGate: (action: string, args: Record<string, unknown>) => Promise<boolean>
 ): Promise<string> {
-  const directIconReplacement = parseDirectIconReplacement(userMessage);
-  if (directIconReplacement) {
-    onStep({
-      type: 'tool_call',
-      content: 'Calling replace_icon',
-      tool: 'replace_icon',
-      args: directIconReplacement,
-    });
+  if (shouldUseDirectShortcuts(config)) {
+    const directIconReplacement = parseDirectIconReplacement(userMessage);
+    if (directIconReplacement) {
+      onStep({
+        type: 'tool_call',
+        content: 'Calling replace_icon',
+        tool: 'replace_icon',
+        args: directIconReplacement,
+      });
 
-    const result = await executeTool('replace_icon', directIconReplacement, tabId);
-    onStep({
-      type: 'tool_result',
-      content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
-      tool: 'replace_icon',
-      result: result.data ?? result.error,
-    });
+      const result = await executeTool('replace_icon', directIconReplacement, tabId);
+      onStep({
+        type: 'tool_result',
+        content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+        tool: 'replace_icon',
+        result: result.data ?? result.error,
+      });
 
-    if (result.ok) {
+      if (result.ok) {
+        const affected = (result.data as { affected?: number } | undefined)?.affected ?? 0;
+        const answer = affected > 0
+          ? `Changed ${affected} matching icon${affected === 1 ? '' : 's'} to "${directIconReplacement.replacement}".`
+          : `I could not find an icon matching "${directIconReplacement.target}".`;
+        onStep({ type: 'answer', content: answer });
+        return answer;
+      }
+
+      const answer = `I could not change the icon: ${result.error}`;
+      onStep({ type: 'answer', content: answer });
+      return answer;
+    }
+
+    const directDropdownOption = parseDirectDropdownOption(userMessage);
+    if (directDropdownOption) {
+      onStep({
+        type: 'tool_call',
+        content: 'Calling add_dropdown_option',
+        tool: 'add_dropdown_option',
+        args: directDropdownOption,
+      });
+
+      const result = await executeTool('add_dropdown_option', directDropdownOption, tabId);
+      onStep({
+        type: 'tool_result',
+        content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+        tool: 'add_dropdown_option',
+        result: result.data ?? result.error,
+      });
+
+      if (result.ok) {
+        const count = Number((result.data as any)?.affected ?? 0);
+        return `Done. I added "${directDropdownOption.optionLabel}" to ${count || 'the'} matching dropdown${count === 1 ? '' : 's'}.`;
+      }
+      return `I could not add the dropdown option: ${result.error}`;
+    }
+
+    const directPlaceholderChange = parseDirectPlaceholderChange(userMessage);
+    if (directPlaceholderChange) {
+      onStep({
+        type: 'tool_call',
+        content: 'Calling set_placeholder_by_label',
+        tool: 'set_placeholder_by_label',
+        args: directPlaceholderChange,
+      });
+
+      const result = await executeTool('set_placeholder_by_label', directPlaceholderChange, tabId);
+      onStep({
+        type: 'tool_result',
+        content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+        tool: 'set_placeholder_by_label',
+        result: result.data ?? result.error,
+      });
+
+      if (!result.ok) {
+        const answer = `I could not set the placeholder: ${result.error}`;
+        onStep({ type: 'answer', content: answer });
+        return answer;
+      }
+
       const affected = (result.data as { affected?: number } | undefined)?.affected ?? 0;
       const answer = affected > 0
-        ? `Changed ${affected} matching icon${affected === 1 ? '' : 's'} to "${directIconReplacement.replacement}".`
-        : `I could not find an icon matching "${directIconReplacement.target}".`;
+        ? `Set the placeholder on ${affected} matching field${affected === 1 ? '' : 's'}.`
+        : `I could not find a field matching "${directPlaceholderChange.label}".`;
       onStep({ type: 'answer', content: answer });
       return answer;
     }
 
-    const answer = `I could not change the icon: ${result.error}`;
-    onStep({ type: 'answer', content: answer });
-    return answer;
-  }
+    const directStyleChange = parseDirectStyleChange(userMessage);
+    if (directStyleChange) {
+      const args = {
+        text: directStyleChange.text,
+        elementKind: 'button',
+        styles: {
+          backgroundColor: directStyleChange.color,
+          borderColor: directStyleChange.color,
+          color: '#fff',
+        },
+      };
+      onStep({
+        type: 'tool_call',
+        content: 'Calling style_by_text',
+        tool: 'style_by_text',
+        args,
+      });
 
-  const directDropdownOption = parseDirectDropdownOption(userMessage);
-  if (directDropdownOption) {
-    onStep({
-      type: 'tool_call',
-      content: 'Calling add_dropdown_option',
-      tool: 'add_dropdown_option',
-      args: directDropdownOption,
-    });
+      const result = await executeTool('style_by_text', args, tabId);
+      onStep({
+        type: 'tool_result',
+        content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+        tool: 'style_by_text',
+        result: result.data ?? result.error,
+      });
 
-    const result = await executeTool('add_dropdown_option', directDropdownOption, tabId);
-    onStep({
-      type: 'tool_result',
-      content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
-      tool: 'add_dropdown_option',
-      result: result.data ?? result.error,
-    });
+      if (!result.ok) {
+        const answer = `I could not change the button color: ${result.error}`;
+        onStep({ type: 'answer', content: answer });
+        return answer;
+      }
 
-    if (result.ok) {
-      const count = Number((result.data as any)?.affected ?? 0);
-      return `Done. I added "${directDropdownOption.optionLabel}" to ${count || 'the'} matching dropdown${count === 1 ? '' : 's'}.`;
-    }
-    return `I could not add the dropdown option: ${result.error}`;
-  }
-
-  const directPlaceholderChange = parseDirectPlaceholderChange(userMessage);
-  if (directPlaceholderChange) {
-    onStep({
-      type: 'tool_call',
-      content: 'Calling set_placeholder_by_label',
-      tool: 'set_placeholder_by_label',
-      args: directPlaceholderChange,
-    });
-
-    const result = await executeTool('set_placeholder_by_label', directPlaceholderChange, tabId);
-    onStep({
-      type: 'tool_result',
-      content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
-      tool: 'set_placeholder_by_label',
-      result: result.data ?? result.error,
-    });
-
-    if (!result.ok) {
-      const answer = `I could not set the placeholder: ${result.error}`;
+      const affected = (result.data as { affected?: number } | undefined)?.affected ?? 0;
+      const answer = affected > 0
+        ? `Changed the "${directStyleChange.text}" button color to ${directStyleChange.color}.`
+        : `I could not find a button matching "${directStyleChange.text}".`;
       onStep({ type: 'answer', content: answer });
       return answer;
     }
 
-    const affected = (result.data as { affected?: number } | undefined)?.affected ?? 0;
-    const answer = affected > 0
-      ? `Set the placeholder on ${affected} matching field${affected === 1 ? '' : 's'}.`
-      : `I could not find a field matching "${directPlaceholderChange.label}".`;
-    onStep({ type: 'answer', content: answer });
-    return answer;
-  }
+    const directReplacement = parseDirectTextReplacement(userMessage);
+    if (directReplacement) {
+      onStep({
+        type: 'tool_call',
+        content: 'Calling replace_text',
+        tool: 'replace_text',
+        args: { ...directReplacement, case_sensitive: false },
+      });
 
-  const directStyleChange = parseDirectStyleChange(userMessage);
-  if (directStyleChange) {
-    const args = {
-      text: directStyleChange.text,
-      elementKind: 'button',
-      styles: {
-        backgroundColor: directStyleChange.color,
-        borderColor: directStyleChange.color,
-        color: '#fff',
-      },
-    };
-    onStep({
-      type: 'tool_call',
-      content: 'Calling style_by_text',
-      tool: 'style_by_text',
-      args,
-    });
+      const result = await executeTool('replace_text', { ...directReplacement, case_sensitive: false }, tabId);
+      onStep({
+        type: 'tool_result',
+        content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+        tool: 'replace_text',
+        result: result.data ?? result.error,
+      });
 
-    const result = await executeTool('style_by_text', args, tabId);
-    onStep({
-      type: 'tool_result',
-      content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
-      tool: 'style_by_text',
-      result: result.data ?? result.error,
-    });
+      if (!result.ok) {
+        const answer = `I could not change the text: ${result.error}`;
+        onStep({ type: 'answer', content: answer });
+        return answer;
+      }
 
-    if (!result.ok) {
-      const answer = `I could not change the button color: ${result.error}`;
+      const replaced = (result.data as { replaced?: number } | undefined)?.replaced ?? 0;
+      const answer = replaced > 0
+        ? `Changed "${directReplacement.find}" to "${directReplacement.replace}".`
+        : `I could not find visible text matching "${directReplacement.find}".`;
       onStep({ type: 'answer', content: answer });
       return answer;
     }
-
-    const affected = (result.data as { affected?: number } | undefined)?.affected ?? 0;
-    const answer = affected > 0
-      ? `Changed the "${directStyleChange.text}" button color to ${directStyleChange.color}.`
-      : `I could not find a button matching "${directStyleChange.text}".`;
-    onStep({ type: 'answer', content: answer });
-    return answer;
-  }
-
-  const directReplacement = parseDirectTextReplacement(userMessage);
-  if (directReplacement) {
-    onStep({
-      type: 'tool_call',
-      content: 'Calling replace_text',
-      tool: 'replace_text',
-      args: { ...directReplacement, case_sensitive: false },
-    });
-
-    const result = await executeTool('replace_text', { ...directReplacement, case_sensitive: false }, tabId);
-    onStep({
-      type: 'tool_result',
-      content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
-      tool: 'replace_text',
-      result: result.data ?? result.error,
-    });
-
-    if (!result.ok) {
-      const answer = `I could not change the text: ${result.error}`;
-      onStep({ type: 'answer', content: answer });
-      return answer;
-    }
-
-    const replaced = (result.data as { replaced?: number } | undefined)?.replaced ?? 0;
-    const answer = replaced > 0
-      ? `Changed "${directReplacement.find}" to "${directReplacement.replace}".`
-      : `I could not find visible text matching "${directReplacement.find}".`;
-    onStep({ type: 'answer', content: answer });
-    return answer;
   }
 
   const llm = createLLMClient({
