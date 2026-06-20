@@ -436,6 +436,18 @@ test('applies DOM modification tools inside an iframe', async ({ context, extens
     await expect(frame.locator('#phone')).toHaveAttribute('placeholder', 'BLABH BLAASDA');
     await expect(frame.locator('#customer')).toHaveText('Client');
 
+    await target.locator('#childFrame').evaluate((iframe: HTMLIFrameElement) => {
+      iframe.src = 'about:blank';
+    });
+    await target.waitForTimeout(500);
+    await target.locator('#childFrame').evaluate((iframe: HTMLIFrameElement) => {
+      iframe.src = '/frame';
+    });
+    await frame.locator('#customer').waitFor();
+    await expect(frame.locator('#heading')).toHaveCSS('color', 'rgb(255, 0, 0)');
+    await expect(frame.locator('#phone')).toHaveAttribute('placeholder', 'BLABH BLAASDA');
+    await expect(frame.locator('#customer')).toHaveText('Client');
+
     await extensionPage.close();
     await target.close();
   });

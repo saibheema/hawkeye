@@ -4,10 +4,12 @@
 import { initPageObserver } from './page-observer.js';
 import { initElementPicker } from './element-picker.js';
 import { initInteractionRecorder } from './interaction-recorder.js';
+import { initPersistedDomMutations } from './persisted-dom-mutations.js';
 
 initPageObserver();
 initElementPicker();
 initInteractionRecorder();
+initPersistedDomMutations();
 
 // Re-apply any persisted CSS rules for this domain
 const domain = location.hostname;

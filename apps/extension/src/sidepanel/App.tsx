@@ -34,10 +34,11 @@ function ResetButton() {
   const handleClick = async () => {
     if (!confirming) { setConfirming(true); return; }
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.url) {
-      const domain = new URL(tab.url).hostname;
-      await chrome.storage.local.remove(`hawkeye_css_${domain}`);
-    }
+    const allStorage = await chrome.storage.local.get(null);
+    const persistedKeys = Object.keys(allStorage).filter((key) =>
+      key.startsWith('hawkeye_css_') || key.startsWith('hawkeye_dom_mutations_')
+    );
+    if (persistedKeys.length > 0) await chrome.storage.local.remove(persistedKeys);
     setConfirming(false);
     setDone(true);
     setTimeout(() => setDone(false), 2000);

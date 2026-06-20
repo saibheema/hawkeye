@@ -11,6 +11,13 @@ export interface ToolResult {
   error?: string;
 }
 
+type PersistedDomMutation = {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  createdAt: number;
+};
+
 // ─── Tool definitions (JSON Schema) ──────────────────────────────────────────
 
 export const TOOLS: LLMTool[] = [
@@ -644,7 +651,7 @@ export async function executeTool(
                 default: return { ok: false, error: `Unknown op: ${o.op}` };
               }
             }
-            return { ok: true, count: els.length };
+            return { ok: true, count: els.length, frameUrl: location.href };
           },
           args: [op],
         });
@@ -652,6 +659,7 @@ export async function executeTool(
         if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
         const affected = results.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
         if (affected === 0) return { ok: false, error: `No elements match selector: ${op.selector}` };
+        await persistDomMutation(tabId, 'dom_op', op as unknown as Record<string, unknown>, results);
         return { ok: true, data: { affected } };
       }
 
@@ -685,7 +693,7 @@ export async function executeTool(
             // Accept both camelCase and kebab-case property names
             const prop = o.property.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
             for (const el of els) (el.style as any)[prop] = o.value;
-            return { ok: true, count: els.length };
+            return { ok: true, count: els.length, frameUrl: location.href };
           },
           args: [a],
         });
@@ -693,6 +701,7 @@ export async function executeTool(
         if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
         const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
         if (affected === 0) return { ok: false, error: `No elements match selector: ${a.selector}` };
+        await persistDomMutation(tabId, 'set_style', a as unknown as Record<string, unknown>, res);
         return { ok: true, data: { affected } };
       }
 
@@ -705,7 +714,7 @@ export async function executeTool(
           func: (o: InsertHtmlArgs) => {
             const els = Array.from(document.querySelectorAll(o.selector));
             for (const el of els) el.insertAdjacentHTML(o.position, o.html);
-            return { ok: true, count: els.length };
+            return { ok: true, count: els.length, frameUrl: location.href };
           },
           args: [a],
         });
@@ -808,7 +817,7 @@ export async function executeTool(
                 count++;
               }
             }
-            return { ok: true as const, count };
+            return { ok: true as const, count, frameUrl: location.href };
           },
           args: [a],
         });
@@ -816,6 +825,7 @@ export async function executeTool(
         if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
         const replaced = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
         if (replaced === 0) return { ok: false, error: `No visible text matched: ${a.find}` };
+        await persistDomMutation(tabId, 'replace_text', a as unknown as Record<string, unknown>, res);
         return { ok: true, data: { replaced } };
       }
 
@@ -855,7 +865,7 @@ export async function executeTool(
               count++;
               if (o.elementKind !== 'button') break;
             }
-            return { ok: true as const, count };
+            return { ok: true as const, count, frameUrl: location.href };
           },
           args: [a],
         });
@@ -863,6 +873,7 @@ export async function executeTool(
         if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
         const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
         if (affected === 0) return { ok: false, error: `No visible element matched text: ${a.text}` };
+        await persistDomMutation(tabId, 'style_by_text', a as unknown as Record<string, unknown>, res);
         return { ok: true, data: { affected } };
       }
 
@@ -909,7 +920,7 @@ export async function executeTool(
               field.dispatchEvent(new Event('change', { bubbles: true }));
               count++;
             }
-            return { ok: true as const, count };
+            return { ok: true as const, count, frameUrl: location.href };
           },
           args: [a],
         });
@@ -917,6 +928,7 @@ export async function executeTool(
         if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
         const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
         if (affected === 0) return { ok: false, error: `No input matched label: ${a.label}` };
+        await persistDomMutation(tabId, 'set_placeholder_by_label', a as unknown as Record<string, unknown>, res);
         return { ok: true, data: { affected } };
       }
 
@@ -931,7 +943,7 @@ export async function executeTool(
               ? Array.from(document.querySelectorAll(o.selector)) as HTMLElement[]
               : [document.documentElement];
             for (const target of targets) target.style.setProperty(o.variable, o.value);
-            return { ok: true, count: targets.length };
+            return { ok: true, count: targets.length, frameUrl: location.href };
           },
           args: [a],
         });
@@ -939,6 +951,7 @@ export async function executeTool(
         if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
         const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
         if (affected === 0) return { ok: false, error: `No elements match selector: ${a.selector}` };
+        await persistDomMutation(tabId, 'set_css_var', a as unknown as Record<string, unknown>, res);
         return { ok: true, data: { set: args.variable, to: args.value, affected } };
       }
 
@@ -951,6 +964,46 @@ export async function executeTool(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async function persistDomMutation(
+  tabId: number,
+  tool: string,
+  args: Record<string, unknown>,
+  results?: chrome.scripting.InjectionResult<unknown>[]
+): Promise<void> {
+  const hosts = new Set<string>();
+  const tab = await chrome.tabs.get(tabId);
+  if (tab.url) {
+    try { hosts.add(new URL(tab.url).hostname); } catch {}
+  }
+  for (const frameResult of results ?? []) {
+    const result = frameResult.result as any;
+    if (!result || Number(result.count ?? 0) <= 0 || !result.frameUrl) continue;
+    try { hosts.add(new URL(result.frameUrl).hostname); } catch {}
+  }
+
+  const mutation: PersistedDomMutation = {
+    id: stableMutationId(tool, args),
+    tool,
+    args,
+    createdAt: Date.now(),
+  };
+
+  await Promise.all(Array.from(hosts).map(async (host) => {
+    const key = `hawkeye_dom_mutations_${host}`;
+    const stored = await chrome.storage.local.get(key);
+    const existing: PersistedDomMutation[] = stored[key] ?? [];
+    const next = [
+      ...existing.filter((item) => item.id !== mutation.id),
+      mutation,
+    ].slice(-100);
+    await chrome.storage.local.set({ [key]: next });
+  }));
+}
+
+function stableMutationId(tool: string, args: Record<string, unknown>): string {
+  return `${tool}:${JSON.stringify(args)}`;
+}
 
 function sendToContent(tabId: number, message: unknown): Promise<any> {
   return new Promise((resolve) => {
