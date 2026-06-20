@@ -6,10 +6,19 @@ import { initElementPicker } from './element-picker.js';
 import { initInteractionRecorder } from './interaction-recorder.js';
 import { initPersistedDomMutations } from './persisted-dom-mutations.js';
 
-initPageObserver();
-initElementPicker();
-initInteractionRecorder();
-initPersistedDomMutations();
+declare global {
+  interface Window {
+    __hawkeyeContentInitialized?: boolean;
+  }
+}
+
+if (!window.__hawkeyeContentInitialized) {
+  window.__hawkeyeContentInitialized = true;
+  initPageObserver();
+  initElementPicker();
+  initInteractionRecorder();
+  initPersistedDomMutations();
+}
 
 // Re-apply any persisted CSS rules for this domain
 const domain = location.hostname;

@@ -27,6 +27,7 @@ let recording = false;
 let lastScrollAt = 0;
 let lastScrollY = 0;
 const suppressSubmitUntil = new WeakMap<HTMLFormElement, number>();
+const resumingSubmissions = new WeakSet<HTMLFormElement>();
 
 export function initInteractionRecorder() {
   try {
@@ -51,6 +52,7 @@ export function initInteractionRecorder() {
   }
 
   document.addEventListener('click', recordClick, true);
+  document.addEventListener('input', recordInput, true);
   document.addEventListener('keydown', recordKeyDown, true);
   document.addEventListener('change', recordChange, true);
   document.addEventListener('submit', recordSubmit, true);
@@ -65,42 +67,67 @@ function recordClick(event: MouseEvent) {
     const form = (el as HTMLButtonElement | HTMLInputElement).form ?? el.closest('form');
     const formSteps = form ? getFormStateSteps(form) : [];
     if (form) suppressSubmitUntil.set(form, Date.now() + 1500);
-    sendSteps([
+    const steps = [
       ...formSteps,
       { tool: 'click', args: { selector: getSelector(el) }, meta: { source: 'manual', label: labelFor(el) } },
-    ]);
+    ];
+    if (form) {
+      event.preventDefault();
+      void flushStepsThenSubmit(form, steps, el instanceof HTMLButtonElement || el instanceof HTMLInputElement ? el : undefined);
+      return;
+    }
+    sendSteps(steps);
     return;
   }
   sendStep('click', { selector: getSelector(el) }, { source: 'manual', label: labelFor(el) });
 }
 
+function recordInput(event: Event) {
+  if (!recording || !event.isTrusted) return;
+  const step = inputStepFromElement(event.target);
+  if (step) sendStep(step.tool, step.args, step.meta);
+}
+
 function recordChange(event: Event) {
   if (!recording || !event.isTrusted) return;
-  const el = event.target;
-  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) return;
+  const step = inputStepFromElement(event.target);
+  if (!step) return;
+  sendStep(step.tool, step.args, step.meta);
+}
+
+function inputStepFromElement(target: EventTarget | null): RecordedStep | null {
+  const el = target;
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) return null;
 
   const selector = getSelector(el);
   const label = labelFor(el);
 
   if (el instanceof HTMLSelectElement) {
-    sendStep('select_option', { selector, value: el.value }, {
+    return {
+      tool: 'select_option',
+      args: { selector, value: el.value },
+      meta: {
       source: 'manual',
       label,
       originalValue: el.value,
-    });
-    return;
+      },
+    };
   }
 
   if (el instanceof HTMLInputElement && ['checkbox', 'radio', 'button', 'submit', 'reset'].includes(el.type)) {
-    return;
+    return null;
   }
 
-  sendStep('type_text', { selector, text: el.value }, {
-    source: 'manual',
-    dataKind: inferDataKind(el, label),
-    label,
-    originalValue: el.value,
-  });
+  return {
+    tool: 'type_text',
+    args: { selector, text: el.value },
+    meta: {
+      source: 'manual',
+      dataKind: inferDataKind(el, label),
+      label,
+      originalValue: el.value,
+    },
+  };
 }
 
 function recordKeyDown(event: KeyboardEvent) {
@@ -137,7 +164,12 @@ function recordKeyDown(event: KeyboardEvent) {
     args: { selector, event: 'keydown', key: 'Enter' },
     meta: { source: 'manual', label: 'Enter key' },
   });
-  if (el.form) suppressSubmitUntil.set(el.form, Date.now() + 1500);
+  if (el.form) {
+    suppressSubmitUntil.set(el.form, Date.now() + 1500);
+    event.preventDefault();
+    void flushStepsThenSubmit(el.form, steps);
+    return;
+  }
   sendSteps(steps);
 }
 
@@ -145,10 +177,12 @@ function recordSubmit(event: SubmitEvent) {
   if (!recording || !event.isTrusted) return;
   const form = event.target;
   if (!(form instanceof HTMLFormElement)) return;
+  if (resumingSubmissions.has(form)) return;
   if ((suppressSubmitUntil.get(form) ?? 0) > Date.now()) return;
+  event.preventDefault();
   const formSteps = getFormStateSteps(form);
   const selector = getSelector(form);
-  sendSteps([
+  void flushStepsThenSubmit(form, [
     ...formSteps,
     { tool: 'trigger_event', args: { selector, event: 'submit' }, meta: { source: 'manual', label: labelFor(form) || 'Submit form' } },
   ]);
@@ -228,13 +262,47 @@ function sendStep(tool: string, args: Record<string, unknown>, meta?: Record<str
 }
 
 function sendSteps(steps: RecordedStep[]) {
+  void sendStepsAck(steps);
+}
+
+function sendStepsAck(steps: RecordedStep[]): Promise<void> {
+  if (steps.length === 0) return Promise.resolve();
   try {
-    chrome.runtime.sendMessage(
-      { type: 'FLOW_RECORD_STEPS', payload: { steps } },
-      () => { void chrome.runtime.lastError; }
-    );
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      const timer = window.setTimeout(finish, 250);
+      chrome.runtime.sendMessage(
+        { type: 'FLOW_RECORD_STEPS', payload: { steps } },
+        () => {
+          window.clearTimeout(timer);
+          void chrome.runtime.lastError;
+          finish();
+        }
+      );
+    });
   } catch {
     recording = false;
+    return Promise.resolve();
+  }
+}
+
+async function flushStepsThenSubmit(
+  form: HTMLFormElement,
+  steps: RecordedStep[],
+  submitter?: HTMLButtonElement | HTMLInputElement
+) {
+  await sendStepsAck(steps);
+  resumingSubmissions.add(form);
+  window.setTimeout(() => resumingSubmissions.delete(form), 1500);
+  if (typeof form.requestSubmit === 'function') {
+    form.requestSubmit(submitter);
+  } else {
+    form.submit();
   }
 }
 

@@ -1152,7 +1152,15 @@ function stableMutationId(tool: string, args: Record<string, unknown>): string {
   return `${tool}:${JSON.stringify(args)}`;
 }
 
-function sendToContent(tabId: number, message: unknown): Promise<any> {
+async function sendToContent(tabId: number, message: unknown): Promise<any> {
+  let res = await sendMessageToContent(tabId, message);
+  if (res?.ok || res?.error !== 'No response from content script') return res;
+  await injectConfiguredContentScripts(tabId);
+  res = await sendMessageToContent(tabId, message);
+  return res;
+}
+
+function sendMessageToContent(tabId: number, message: unknown): Promise<any> {
   return new Promise((resolve) => {
     chrome.tabs.sendMessage(tabId, message, (res) => {
       // Consume lastError to prevent "Unchecked runtime.lastError" when the
@@ -1161,6 +1169,17 @@ function sendToContent(tabId: number, message: unknown): Promise<any> {
       resolve(res ?? { ok: false, error: 'No response from content script' });
     });
   });
+}
+
+async function injectConfiguredContentScripts(tabId: number): Promise<void> {
+  const manifest = chrome.runtime.getManifest();
+  const scripts = manifest.content_scripts?.flatMap((script) => script.js ?? []) ?? [];
+  if (scripts.length === 0) return;
+  try {
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: scripts });
+  } catch {
+    // The tab may be a restricted URL or may have navigated mid-replay.
+  }
 }
 
 function waitForTabLoad(tabId: number): Promise<void> {

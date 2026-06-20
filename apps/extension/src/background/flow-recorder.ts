@@ -70,7 +70,18 @@ export function recordStep(
   meta?: FlowStep['meta']
 ): void {
   const steps = recording.get(tabId);
-  if (steps) steps.push({ tool, args, meta });
+  if (!steps) return;
+  const last = steps[steps.length - 1];
+  if (
+    tool === 'type_text'
+    && last?.tool === 'type_text'
+    && last.args.selector === args.selector
+    && last.args.frameId === args.frameId
+  ) {
+    steps[steps.length - 1] = { tool, args, meta };
+    return;
+  }
+  steps.push({ tool, args, meta });
 }
 
 export function getRecordingSteps(tabId: number): FlowStep[] {

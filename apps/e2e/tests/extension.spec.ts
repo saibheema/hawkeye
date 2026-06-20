@@ -301,6 +301,46 @@ test('records Enter key submissions as replayable steps', async ({ context, exte
   });
 });
 
+test('records Enter search before immediate navigation', async ({ context, extensionId }) => {
+  const html = (req: http.IncomingMessage) => {
+    if (req.url?.startsWith('/search')) {
+      return `<!doctype html><html><body><h1>Results</h1></body></html>`;
+    }
+    return `<!doctype html>
+      <html>
+        <body>
+          <form id="searchForm" action="/search">
+            <label>Search <input id="q" name="q" autocomplete="off"></label>
+            <input id="searchButton" type="submit" value="Google Search">
+          </form>
+        </body>
+      </html>`;
+  };
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+    await target.locator('#q').fill('hello google search');
+    await target.locator('#q').press('Enter');
+    await expect(target.locator('h1')).toHaveText('Results');
+
+    const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+    const steps = stopped.steps ?? [];
+    expect(steps.some((step: any) => step.tool === 'type_text' && step.args?.text === 'hello google search')).toBe(true);
+    expect(steps.some((step: any) => step.tool === 'trigger_event' && step.args?.event === 'keydown' && step.args?.key === 'Enter')).toBe(true);
+    expect(steps.length).toBeGreaterThanOrEqual(2);
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('records manual form actions and replays same or random data', async ({ context, extensionId }) => {
   test.setTimeout(120_000);
   const html = `<!doctype html>
