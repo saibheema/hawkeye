@@ -358,6 +358,8 @@ function FlowsPanel() {
   const [recording, setRecording] = useState(false);
   const [recordedSteps, setRecordedSteps] = useState<any[]>([]);
   const [recordedStepCount, setRecordedStepCount] = useState(0);
+  const [recordedStartUrl, setRecordedStartUrl] = useState('');
+  const [recordedStartTitle, setRecordedStartTitle] = useState('');
   const [saveName, setSaveName] = useState('');
   const [saving, setSaving] = useState(false);
   const [flows, setFlows] = useState<any[]>([]);
@@ -415,10 +417,12 @@ function FlowsPanel() {
   const toggleRecord = async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!recording) {
-      chrome.runtime.sendMessage({ type: 'FLOW_RECORD_START', tabId: tab?.id }, () => {
+      chrome.runtime.sendMessage({ type: 'FLOW_RECORD_START', tabId: tab?.id }, (res) => {
         setRecording(true);
         setRecordedSteps([]);
         setRecordedStepCount(0);
+        setRecordedStartUrl(res?.startUrl ?? tab?.url ?? '');
+        setRecordedStartTitle(res?.startTitle ?? tab?.title ?? '');
         setSaveName('');
       });
     } else {
@@ -427,6 +431,8 @@ function FlowsPanel() {
         if (res?.steps) {
           setRecordedSteps(res.steps);
           setRecordedStepCount(res.steps.length);
+          setRecordedStartUrl(res.startUrl ?? recordedStartUrl);
+          setRecordedStartTitle(res.startTitle ?? recordedStartTitle);
         }
       });
     }
@@ -441,6 +447,8 @@ function FlowsPanel() {
         payload: {
           name: saveName.trim(),
           domain,
+          startUrl: recordedStartUrl,
+          startTitle: recordedStartTitle,
           steps: recordedSteps,
           replayDefaults: { repeatCount: 1, dataMode: 'same', fieldStrategies: {} },
         },
@@ -452,6 +460,8 @@ function FlowsPanel() {
           setSelectedFlowId(res.flow.id);
           setRecordedSteps([]);
           setRecordedStepCount(0);
+          setRecordedStartUrl('');
+          setRecordedStartTitle('');
           setSaveName('');
         }
       }

@@ -332,16 +332,80 @@ test('records Enter search before immediate navigation', async ({ context, exten
 
     const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
     const steps = stopped.steps ?? [];
+    expect(stopped.startUrl).toBe(baseUrl + '/');
     expect(steps.some((step: any) => step.tool === 'type_text' && step.args?.text === 'hello google search')).toBe(true);
     expect(steps.some((step: any) => step.tool === 'trigger_event' && step.args?.event === 'keydown' && step.args?.key === 'Enter')).toBe(true);
     expect(steps.length).toBeGreaterThanOrEqual(2);
 
-    await target.goto(baseUrl);
-    const flow = { id: 'flow_search_enter', name: 'Search enter', domain: '127.0.0.1', createdAt: Date.now(), steps, stepCount: steps.length };
+    const flow = { id: 'flow_search_enter', name: 'Search enter', domain: '127.0.0.1', startUrl: stopped.startUrl, createdAt: Date.now(), steps, stepCount: steps.length };
     const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
     expect(results).toHaveLength(1);
     expect(results[0].ok).toBe(true);
     await expect(target.locator('h1')).toHaveText('Results');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
+test('keeps recording after full page navigation and replays from start URL', async ({ context, extensionId }) => {
+  const html = (req: http.IncomingMessage) => {
+    if (req.url?.startsWith('/second')) {
+      return `<!doctype html>
+        <html>
+          <body>
+            <form id="secondForm">
+              <label for="secondName">Name</label>
+              <input id="secondName" name="secondName">
+              <button id="done" type="submit">Done</button>
+            </form>
+            <script>
+              window.__submits = [];
+              document.querySelector('#secondForm').addEventListener('submit', (event) => {
+                event.preventDefault();
+                window.__submits.push(Object.fromEntries(new FormData(event.currentTarget).entries()));
+              });
+            </script>
+          </body>
+        </html>`;
+    }
+    return `<!doctype html>
+      <html>
+        <body>
+          <a id="next" href="/second">Next screen</a>
+        </body>
+      </html>`;
+  };
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+    await target.locator('#next').click();
+    await expect(target.locator('#secondName')).toBeVisible();
+    await target.locator('#secondName').fill('Navigation Flow');
+    await target.locator('#done').click();
+
+    const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+    const steps = stopped.steps ?? [];
+    expect(stopped.startUrl).toBe(baseUrl + '/');
+    expect(steps.some((step: any) => step.tool === 'click' && step.meta?.label === 'Next screen')).toBe(true);
+    expect(steps.some((step: any) => step.tool === 'type_text' && step.args?.text === 'Navigation Flow')).toBe(true);
+
+    const flow = { id: 'flow_nav_start', name: 'Navigation start', domain: '127.0.0.1', startUrl: stopped.startUrl, createdAt: Date.now(), steps, stepCount: steps.length };
+    await target.goto(`${baseUrl}/second`);
+    await target.evaluate(() => { (window as any).__submits = []; });
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results).toHaveLength(1);
+    expect(results[0].ok).toBe(true);
+    await expect(target.locator('#secondName')).toBeVisible();
+    const submits = await target.evaluate(() => (window as any).__submits);
+    expect(submits).toEqual([{ secondName: 'Navigation Flow' }]);
 
     await extensionPage.close();
     await target.close();

@@ -7,7 +7,7 @@ import type { ExtensionMessage, AgentState } from '@hawkeye/types';
 import { startNetworkWatcher } from './network-watcher.js';
 import { runAgent } from './agent.js';
 import {
-  startRecording, stopRecording, isRecording, recordStep, getRecordingSteps,
+  startRecording, stopRecording, isRecording, recordStep, getRecordingSteps, getRecordingState,
   saveFlow, listFlows, deleteFlow,
 } from './flow-recorder.js';
 import { replayFlow } from './flow-runner.js';
@@ -174,17 +174,25 @@ async function handleMessage(
       // ---------- Flow Recording ----------
       case 'FLOW_RECORD_START': {
         if (!tabId) { sendResponse({ error: 'no tab' }); break; }
-        startRecording(tabId);
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        startRecording(tabId, { startUrl: tab?.url, startTitle: tab?.title });
         chrome.tabs.sendMessage(tabId, { type: 'FLOW_RECORD_START', payload: {} }, () => { void chrome.runtime.lastError; });
-        sendResponse({ ok: true });
+        sendResponse({ ok: true, startUrl: tab?.url, startTitle: tab?.title });
         break;
       }
 
       case 'FLOW_RECORD_STOP': {
         if (!tabId) { sendResponse({ error: 'no tab' }); break; }
         chrome.tabs.sendMessage(tabId, { type: 'FLOW_RECORD_STOP', payload: {} }, () => { void chrome.runtime.lastError; });
-        const steps = stopRecording(tabId);
-        sendResponse({ ok: true, steps });
+        const state = stopRecording(tabId);
+        sendResponse({ ok: true, steps: state.steps, startUrl: state.startUrl, startTitle: state.startTitle });
+        break;
+      }
+
+      case 'FLOW_RECORD_STATUS': {
+        if (!tabId) { sendResponse({ ok: false, recording: false }); break; }
+        const state = getRecordingState(tabId);
+        sendResponse({ ok: true, recording: !!state, startUrl: state?.startUrl, startTitle: state?.startTitle });
         break;
       }
 
@@ -235,13 +243,15 @@ async function handleMessage(
       }
 
       case 'FLOW_SAVE': {
-        const { name, domain, steps, replayDefaults } = message.payload as {
+        const { name, domain, steps, replayDefaults, startUrl, startTitle } = message.payload as {
           name: string;
           domain: string;
           steps: any[];
           replayDefaults?: any;
+          startUrl?: string;
+          startTitle?: string;
         };
-        const flow = await saveFlow(name, domain, steps, replayDefaults);
+        const flow = await saveFlow(name, domain, steps, replayDefaults, startUrl, startTitle);
         sendResponse({ ok: true, flow });
         break;
       }

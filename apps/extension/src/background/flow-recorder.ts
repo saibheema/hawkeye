@@ -37,6 +37,8 @@ export interface Flow {
   id: string;
   name: string;
   domain: string;
+  startUrl?: string;
+  startTitle?: string;
   createdAt: number;
   updatedAt?: number;
   version?: number;
@@ -46,17 +48,23 @@ export interface Flow {
   replayDefaults?: FlowReplayDefaults;
 }
 
-// In-memory recording state (per tab)
-const recording = new Map<number, FlowStep[]>();
-
-export function startRecording(tabId: number): void {
-  recording.set(tabId, []);
+export interface RecordingState {
+  steps: FlowStep[];
+  startUrl?: string;
+  startTitle?: string;
 }
 
-export function stopRecording(tabId: number): FlowStep[] {
-  const steps = recording.get(tabId) ?? [];
+// In-memory recording state (per tab)
+const recording = new Map<number, RecordingState>();
+
+export function startRecording(tabId: number, meta: { startUrl?: string; startTitle?: string } = {}): void {
+  recording.set(tabId, { steps: [], ...meta });
+}
+
+export function stopRecording(tabId: number): RecordingState {
+  const state = recording.get(tabId) ?? { steps: [] };
   recording.delete(tabId);
-  return steps;
+  return state;
 }
 
 export function isRecording(tabId: number): boolean {
@@ -69,8 +77,9 @@ export function recordStep(
   args: Record<string, unknown>,
   meta?: FlowStep['meta']
 ): void {
-  const steps = recording.get(tabId);
-  if (!steps) return;
+  const state = recording.get(tabId);
+  if (!state) return;
+  const steps = state.steps;
   const last = steps[steps.length - 1];
   if (
     tool === 'type_text'
@@ -85,7 +94,11 @@ export function recordStep(
 }
 
 export function getRecordingSteps(tabId: number): FlowStep[] {
-  return recording.get(tabId) ?? [];
+  return recording.get(tabId)?.steps ?? [];
+}
+
+export function getRecordingState(tabId: number): RecordingState | null {
+  return recording.get(tabId) ?? null;
 }
 
 export function extractFlowFields(steps: FlowStep[]): FlowField[] {
@@ -133,7 +146,9 @@ export async function saveFlow(
   name: string,
   domain: string,
   steps: FlowStep[],
-  replayDefaults?: Partial<FlowReplayDefaults>
+  replayDefaults?: Partial<FlowReplayDefaults>,
+  startUrl?: string,
+  startTitle?: string
 ): Promise<Flow> {
   const fields = extractFlowFields(steps);
   const fieldStrategies = {
@@ -144,6 +159,8 @@ export async function saveFlow(
     id: `flow_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     name,
     domain,
+    startUrl,
+    startTitle,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     version: 1,

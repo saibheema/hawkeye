@@ -161,6 +161,7 @@ export async function replayFlow(
 ): Promise<RunResult[]> {
   const results: RunResult[] = [];
   const effectiveStrategies = fieldStrategies ?? flow.replayDefaults?.fieldStrategies;
+  const startUrl = startUrlForFlow(flow);
 
   for (let run = 0; run < repeatCount; run++) {
     const testData = generateTestData(run);
@@ -174,7 +175,20 @@ export async function replayFlow(
     let error: string | undefined;
     let debug: ReplayDebug | undefined;
 
-    for (let si = 0; si < flow.steps.length; si++) {
+    if (startUrl) {
+      const nav = await executeTool('navigate', { url: startUrl }, tabId);
+      if (!nav.ok) {
+        ok = false;
+        failedStep = -1;
+        failedTool = 'navigate';
+        error = `Could not navigate to recorded start URL: ${nav.error}`;
+        debug = await captureReplayDebug(tabId);
+      } else {
+        await new Promise((r) => setTimeout(r, 700));
+      }
+    }
+
+    for (let si = 0; ok && si < flow.steps.length; si++) {
       const step: FlowStep = flow.steps[si];
       const args = argsForStep(flow, step, si, testData, dataMode, effectiveStrategies);
 
@@ -215,6 +229,17 @@ export async function replayFlow(
 
   onProgress({ type: 'all_done', runIndex: repeatCount - 1, total: repeatCount, results });
   return results;
+}
+
+function startUrlForFlow(flow: Flow): string | null {
+  const startUrl = typeof flow.startUrl === 'string' ? flow.startUrl.trim() : '';
+  if (/^https?:\/\//i.test(startUrl)) return startUrl;
+
+  // Backward compatibility for existing Google recordings saved before startUrl existed.
+  // For other domains we avoid guessing because app start paths are often not domain root.
+  const domain = flow.domain.toLowerCase();
+  if (domain === 'google.com' || domain === 'www.google.com') return 'https://www.google.com/';
+  return null;
 }
 
 async function captureReplayDebug(tabId: number): Promise<ReplayDebug> {

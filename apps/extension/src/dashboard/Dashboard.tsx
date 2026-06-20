@@ -18,6 +18,8 @@ type Flow = {
   id: string;
   name: string;
   domain: string;
+  startUrl?: string;
+  startTitle?: string;
   createdAt: number;
   updatedAt?: number;
   version?: number;

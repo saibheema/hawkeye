@@ -57,19 +57,30 @@ export function initInteractionRecorder() {
   document.addEventListener('change', recordChange, true);
   document.addEventListener('submit', recordSubmit, true);
   document.addEventListener('scroll', recordScroll, true);
+
+  try {
+    chrome.runtime.sendMessage({ type: 'FLOW_RECORD_STATUS' }, (res) => {
+      void chrome.runtime.lastError;
+      recording = !!res?.recording;
+      if (recording) lastScrollY = window.scrollY;
+    });
+  } catch {
+    // Extension context may be unavailable during page teardown.
+  }
 }
 
 function recordClick(event: MouseEvent) {
   if (!recording || !event.isTrusted) return;
   const el = closestActionable(event.target);
   if (!el || shouldSkipClick(el)) return;
+  const clickStep: RecordedStep = { tool: 'click', args: locatorArgs(el), meta: { source: 'manual', label: labelFor(el) } };
   if (isSubmitControl(el)) {
     const form = (el as HTMLButtonElement | HTMLInputElement).form ?? el.closest('form');
     const formSteps = form ? getFormStateSteps(form) : [];
     if (form) suppressSubmitUntil.set(form, Date.now() + 1500);
     const steps = [
       ...formSteps,
-      { tool: 'click', args: locatorArgs(el), meta: { source: 'manual', label: labelFor(el) } },
+      clickStep,
     ];
     if (form) {
       event.preventDefault();
@@ -79,7 +90,14 @@ function recordClick(event: MouseEvent) {
     sendSteps(steps);
     return;
   }
-  sendStep('click', locatorArgs(el), { source: 'manual', label: labelFor(el) });
+  if (el instanceof HTMLAnchorElement && el.href && !isModifiedClick(event) && (!el.target || el.target === '_self')) {
+    event.preventDefault();
+    void sendStepsAck([clickStep]).then(() => {
+      location.href = el.href;
+    });
+    return;
+  }
+  sendStep(clickStep.tool, clickStep.args, clickStep.meta);
 }
 
 function recordInput(event: Event) {
@@ -212,6 +230,10 @@ function isSubmitControl(el: Element): boolean {
   if (el instanceof HTMLButtonElement) return (el.type || 'submit') === 'submit';
   if (el instanceof HTMLInputElement) return el.type === 'submit';
   return false;
+}
+
+function isModifiedClick(event: MouseEvent): boolean {
+  return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
 }
 
 function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {
