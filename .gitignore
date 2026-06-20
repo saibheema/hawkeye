@@ -1,0 +1,33 @@
+node_modules/
+dist/
+build/
+.turbo/
+
+*.local
+*.log
+*.tmp
+
+apps/*/dist/
+apps/*/build/
+apps/*/.tmp/
+apps/e2e/test-results/
+apps/e2e/playwright-report/
+apps/e2e/.tmp/
+apps/e2e/node_modules/
+apps/api/node_modules/
+apps/extension/node_modules/
+node_modules/
+
+# Generated artifacts
+coverage/
+*.cache/
+
+# Local environment files
+*.env
+*.env.local
+!.env.example
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/

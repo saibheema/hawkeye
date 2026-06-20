@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hawkeye-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hawkeye}
+      POSTGRES_USER: ${POSTGRES_USER:-hawkeye}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_HOST_AUTH_METHOD: md5
+    ports:
+      - "5433:5432"
+    volumes:
+      - hawkeye_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hawkeye"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: hawkeye-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - hawkeye_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  hawkeye_postgres:
+  hawkeye_redis:

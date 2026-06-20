@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "outDir": "dist",
+    "paths": {
+      "@hawkeye/types": ["../types/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}
