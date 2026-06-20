@@ -616,3 +616,89 @@ test('live Avis Ford scheduler records through contact screen without booking', 
   await extensionPage.close();
   await target.close();
 });
+
+test('live Avis Ford keeps DOM modifications after scheduler back navigation', async ({
+  context,
+  extensionId,
+}) => {
+  test.skip(
+    process.env.HAWKEYE_LIVE_AVISFORD !== '1',
+    'Set HAWKEYE_LIVE_AVISFORD=1 to run the guarded live Avis Ford scheduler test.'
+  );
+  test.setTimeout(120_000);
+
+  const target = await context.newPage();
+  await target.goto('https://www.avisford.com/service-appointment.aspx', {
+    waitUntil: 'domcontentloaded',
+    timeout: 60_000,
+  });
+  await target.waitForTimeout(5_000);
+
+  const allowCookies = target.getByText('Allow all cookies', { exact: true });
+  if (await allowCookies.count()) {
+    await allowCookies.click().catch(() => {});
+    await target.waitForTimeout(3_000);
+  }
+
+  const extensionPage = await context.newPage();
+  await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+  const tabId = await getTabId(extensionPage, 'https://www.avisford.com/service-appointment.aspx');
+
+  const scheduler = () => {
+    const frame = target.frames().find((f) => f.url().includes('guestxpui.ford.com'));
+    if (!frame) throw new Error('Avis Ford scheduler iframe not found');
+    return frame;
+  };
+  const waitForScheduler = async () => {
+    for (let i = 0; i < 60; i++) {
+      const frame = target.frames().find((f) => f.url().includes('guestxpui.ford.com'));
+      if (frame) return frame;
+      await target.waitForTimeout(500);
+    }
+    throw new Error(`Avis Ford scheduler iframe not found. Frames: ${target.frames().map((f) => f.url()).join(', ')}`);
+  };
+
+  const screenOneFlow = {
+    id: 'avis_screen_one_mod',
+    name: 'Avis screen one mod',
+    domain: 'www.avisford.com',
+    createdAt: Date.now(),
+    stepCount: 2,
+    steps: [
+      { tool: 'replace_text', args: { find: 'New Customer', replace: 'Client', case_sensitive: false } },
+      { tool: 'style_by_text', args: { text: 'Welcome', styles: { color: 'rgb(255, 0, 0)' } } },
+    ],
+  };
+
+  let results = await replayFlow(extensionPage, tabId, screenOneFlow, 1, 'same');
+  expect(results[0].ok).toBe(true);
+
+  let frame = await waitForScheduler();
+  await expect(frame.getByText('Client', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(frame.getByText('Welcome', { exact: true })).toHaveCSS('color', 'rgb(255, 0, 0)');
+  await frame.getByText('Client', { exact: true }).click();
+  await expect(frame.locator('#year-input')).toBeVisible({ timeout: 15_000 });
+
+  const screenTwoFlow = {
+    id: 'avis_screen_two_mod',
+    name: 'Avis screen two mod',
+    domain: 'www.avisford.com',
+    createdAt: Date.now(),
+    stepCount: 1,
+    steps: [
+      { tool: 'set_placeholder_by_label', args: { label: 'mileage', placeholder: 'TEST MILEAGE' } },
+    ],
+  };
+  results = await replayFlow(extensionPage, tabId, screenTwoFlow, 1, 'same');
+  expect(results[0].ok).toBe(true);
+  await expect(frame.locator('#mileage-input')).toHaveAttribute('placeholder', 'TEST MILEAGE');
+
+  await frame.getByRole('button', { name: 'back' }).click();
+  await target.waitForTimeout(4_000);
+  frame = await waitForScheduler();
+  await expect(frame.getByText('Client', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(frame.getByText('Welcome', { exact: true })).toHaveCSS('color', 'rgb(255, 0, 0)');
+
+  await extensionPage.close();
+  await target.close();
+});
