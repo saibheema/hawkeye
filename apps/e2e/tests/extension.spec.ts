@@ -399,12 +399,23 @@ test('records clicks after search results navigation', async ({ context, extensi
     if (req.url?.startsWith('/final')) {
       return `<!doctype html><html><body><h1>Final Page</h1></body></html>`;
     }
+    if (req.url?.startsWith('/details')) {
+      return `<!doctype html>
+        <html>
+          <body>
+            <h1>Details</h1>
+            <div id="deepCard" jsaction="click:open" style="cursor:pointer" onclick="location.href='/final'">
+              <span>Open deep Google-style card</span>
+            </div>
+          </body>
+        </html>`;
+    }
     if (req.url?.startsWith('/search')) {
       return `<!doctype html>
         <html>
           <body>
             <h1>Results</h1>
-            <a id="resultLink" href="/final"><h3>Result link</h3></a>
+            <a id="resultLink" href="/details"><h3>Result link</h3></a>
           </body>
         </html>`;
     }
@@ -432,6 +443,8 @@ test('records clicks after search results navigation', async ({ context, extensi
     await target.locator('#q').press('Enter');
     await expect(target.locator('#resultLink')).toBeVisible();
     await target.locator('#resultLink').click();
+    await expect(target.locator('#deepCard')).toBeVisible();
+    await target.locator('#deepCard span').click();
     await expect(target.locator('h1')).toHaveText('Final Page');
 
     const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
@@ -439,7 +452,8 @@ test('records clicks after search results navigation', async ({ context, extensi
     expect(steps.some((step: any) => step.tool === 'type_text' && step.args?.text === 'after search click')).toBe(true);
     expect(steps.some((step: any) => step.tool === 'trigger_event' && step.args?.event === 'keydown' && step.args?.key === 'Enter')).toBe(true);
     expect(steps.some((step: any) => step.tool === 'click' && step.meta?.label === 'Result link')).toBe(true);
-    expect(steps.length).toBeGreaterThanOrEqual(3);
+    expect(steps.some((step: any) => step.tool === 'click' && step.meta?.label === 'Open deep Google-style card')).toBe(true);
+    expect(steps.length).toBeGreaterThanOrEqual(4);
 
     const flow = { id: 'flow_results_click', name: 'Results click', domain: '127.0.0.1', startUrl: stopped.startUrl, createdAt: Date.now(), steps, stepCount: steps.length };
     await target.goto(`${baseUrl}/final`);

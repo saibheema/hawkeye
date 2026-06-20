@@ -715,11 +715,7 @@ function FlowsPanel() {
                   <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 700, color: C.textSecond }}>Stored JSON</summary>
                   <pre style={{ margin: '8px 0 0', maxHeight: 150, overflow: 'auto', fontFamily: C.fontMono, fontSize: 10, color: C.textSecond, whiteSpace: 'pre-wrap' }}>
                     {JSON.stringify({
-                      id: selectedFlow.id,
-                      name: selectedFlow.name,
-                      domain: selectedFlow.domain,
-                      version: selectedFlow.version ?? 0,
-                      stepCount: selectedFlow.stepCount,
+                      ...selectedFlow,
                       fields: selectedFields.map((field) => ({ ...field, strategy: selectedStrategies[field.id] ?? 'same' })),
                       replayDefaults: { repeatCount: replayCount, dataMode, fieldStrategies: selectedStrategies },
                     }, null, 2)}

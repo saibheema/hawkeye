@@ -233,7 +233,7 @@ function recordScroll() {
 
 function closestActionable(target: EventTarget | null): Element | null {
   if (!(target instanceof Element)) return null;
-  return target.closest([
+  const semantic = target.closest([
     'button',
     'a[href]',
     '[role="button"]',
@@ -246,6 +246,42 @@ function closestActionable(target: EventTarget | null): Element | null {
     'input[type="checkbox"]',
     '[tabindex]:not([tabindex="-1"])',
   ].join(','));
+  if (semantic) return semantic;
+
+  const path = typeof (target as any).composedPath === 'function'
+    ? (target as any).composedPath() as EventTarget[]
+    : [];
+  for (const item of path) {
+    if (item instanceof Element && isLikelyClickableWidget(item)) return item;
+    if (item instanceof HTMLBodyElement || item instanceof HTMLHtmlElement) break;
+  }
+  let current: Element | null = target;
+  while (current && !(current instanceof HTMLBodyElement) && !(current instanceof HTMLHtmlElement)) {
+    if (isLikelyClickableWidget(current)) return current;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function isLikelyClickableWidget(el: Element): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return false;
+  if (el.isContentEditable) return false;
+  if (el.getAttribute('aria-disabled') === 'true') return false;
+  if (el.hasAttribute('disabled')) return false;
+
+  const role = el.getAttribute('role')?.toLowerCase() ?? '';
+  if (['button', 'link', 'menuitem', 'option', 'tab', 'checkbox', 'radio'].includes(role)) return true;
+  if (typeof el.onclick === 'function') return true;
+  if (el.hasAttribute('jsaction')) return true;
+  if (el.hasAttribute('data-href') || el.hasAttribute('data-url')) return true;
+  if (el.hasAttribute('aria-expanded') || el.hasAttribute('aria-controls') || el.hasAttribute('aria-selected')) return true;
+
+  const classes = typeof el.className === 'string' ? el.className.toLowerCase() : '';
+  if (/\b(btn|button|link|tab|chip|card|tile|option|menu-item)\b/.test(classes)) return true;
+
+  const style = window.getComputedStyle(el);
+  return style.cursor === 'pointer';
 }
 
 function shouldSkipClick(el: Element): boolean {
