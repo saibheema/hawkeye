@@ -33,6 +33,14 @@ Use the side panel to:
 - save and replay the flow multiple times
 - choose **Same data** or **Random data** per run
 
+Replay hardening includes:
+
+- multi-locator capture for each recorded element
+- selector self-healing when IDs or primary CSS selectors drift
+- smart waits for dynamic UI and iframe rendering
+- iframe-aware replay using recorded frame metadata
+- failure diagnostics with URL, page text snippet, and stored screenshot key
+
 ## Prerequisites
 
 - Node.js 20+

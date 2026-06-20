@@ -8,6 +8,15 @@ import type { DOMElement, DOMAnalysis } from '@hawkeye/types';
 const INTERACTIVE_TAGS = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'FORM', 'LABEL']);
 const MAX_ELEMENTS = 150;
 
+export type LocatorCandidate = {
+  type: 'css' | 'label' | 'text' | 'name' | 'placeholder' | 'aria' | 'role';
+  value: string;
+  selector?: string;
+  score: number;
+  tagName?: string;
+  inputType?: string;
+};
+
 export function analyzeDom(rootSelector?: string): DOMAnalysis {
   const root = rootSelector
     ? (document.querySelector(rootSelector) ?? document.body)
@@ -132,6 +141,75 @@ export function getSelector(el: Element): string {
   }
 
   return path.join(' > ');
+}
+
+export function getLocatorCandidates(el: Element): LocatorCandidate[] {
+  const candidates: LocatorCandidate[] = [];
+  const add = (candidate: LocatorCandidate) => {
+    const key = `${candidate.type}:${candidate.selector ?? ''}:${candidate.value}`;
+    if (!candidate.value || candidates.some((item) => `${item.type}:${item.selector ?? ''}:${item.value}` === key)) return;
+    candidates.push(candidate);
+  };
+  const tagName = el.tagName.toLowerCase();
+  const inputType = (el as HTMLInputElement).type || undefined;
+  const primary = getSelector(el);
+
+  add({ type: 'css', value: primary, selector: primary, score: 100, tagName, inputType });
+  if (el.id) add({ type: 'css', value: `#${CSS.escape(el.id)}`, selector: `#${CSS.escape(el.id)}`, score: 95, tagName, inputType });
+
+  const testId = el.getAttribute('data-testid');
+  if (testId) add({ type: 'css', value: `[data-testid="${cssString(testId)}"]`, selector: `[data-testid="${cssString(testId)}"]`, score: 94, tagName, inputType });
+
+  const name = (el as HTMLInputElement).name;
+  if (name) {
+    add({ type: 'css', value: `${tagName}[name="${cssString(name)}"]`, selector: `${tagName}[name="${cssString(name)}"]`, score: 90, tagName, inputType });
+    add({ type: 'name', value: name, score: 76, tagName, inputType });
+  }
+
+  const aria = el.getAttribute('aria-label');
+  if (aria) {
+    add({ type: 'css', value: `${tagName}[aria-label="${cssString(aria)}"]`, selector: `${tagName}[aria-label="${cssString(aria)}"]`, score: 88, tagName, inputType });
+    add({ type: 'aria', value: aria, score: 84, tagName, inputType });
+  }
+
+  const placeholder = (el as HTMLInputElement).placeholder;
+  if (placeholder) {
+    add({ type: 'css', value: `${tagName}[placeholder="${cssString(placeholder)}"]`, selector: `${tagName}[placeholder="${cssString(placeholder)}"]`, score: 82, tagName, inputType });
+    add({ type: 'placeholder', value: placeholder, score: 74, tagName, inputType });
+  }
+
+  const label = labelForElement(el);
+  if (label) add({ type: 'label', value: label, score: 80, tagName, inputType });
+
+  const role = el.getAttribute('role');
+  if (role) add({ type: 'role', value: role, score: 62, tagName, inputType });
+
+  const text = visibleText(el);
+  if (text) add({ type: 'text', value: text.slice(0, 120), score: 58, tagName, inputType });
+
+  return candidates.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+function labelForElement(el: Element): string {
+  const explicit = el.getAttribute('aria-label') || (el as HTMLInputElement).placeholder || '';
+  if (explicit) return explicit.trim();
+
+  if (el.id) {
+    const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+    if (label?.textContent?.trim()) return label.textContent.trim();
+  }
+
+  const wrappedLabel = el.closest('label')?.textContent?.trim();
+  if (wrappedLabel) return wrappedLabel;
+
+  return '';
+}
+
+function visibleText(el: Element): string {
+  if (el instanceof HTMLInputElement && ['button', 'submit', 'reset'].includes(el.type)) {
+    return el.value.trim();
+  }
+  return el.textContent?.replace(/\s+/g, ' ').trim() ?? '';
 }
 
 function cssString(value: string): string {

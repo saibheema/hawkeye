@@ -314,25 +314,127 @@ export async function executeTool(
         const frameId = await resolveRecordedFrameId(tabId, args);
         if (frameId !== null) {
           const res = await execInFrameId(tabId, frameId,
-            (sel: string) => {
-              const el = document.querySelector(sel) as HTMLElement | null;
-              if (!el) return { ok: false, error: `Element not found in frame: ${sel}` };
+            async (o: Record<string, any>) => {
+              const el = await waitForReplayElement(o, 'click') as HTMLElement | null;
+              if (!el) return { ok: false, error: `Element not found in frame: ${o.selector}` };
               el.click();
               return { ok: true };
-            }, args.selector as string);
+              function findReplayElement(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
+                const selectors = [payload.selector, ...(Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type === 'css').map((c: any) => c.selector || c.value) : [])].filter(Boolean);
+                for (const selector of selectors) {
+                  try {
+                    const el = document.querySelector(selector);
+                    if (el && matchesKind(el, kind)) return el;
+                  } catch {}
+                }
+                return findBySemantic(payload, kind);
+              }
+              function matchesKind(el: Element, kind: 'click' | 'type' | 'select') {
+                if (kind === 'select') return el instanceof HTMLSelectElement;
+                if (kind === 'type') return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
+                return el instanceof HTMLElement;
+              }
+              function findBySemantic(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
+                const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
+                const selector = kind === 'click' ? 'button,a,[role="button"],input[type="button"],input[type="submit"],input[type="reset"],label,[onclick]' : kind === 'select' ? 'select' : 'input:not([type="hidden"]),textarea';
+                const elements = Array.from(document.querySelectorAll(selector));
+                for (const candidate of candidates) {
+                  const needle = normalize(candidate.value || '');
+                  const match = elements.find((el) => matchesKind(el, kind) && normalize([labelFor(el), textFor(el), attrText(el), (el as HTMLInputElement).name, el.id].filter(Boolean).join(' ')).includes(needle));
+                  if (match) return match;
+                }
+                return null;
+              }
+              function labelFor(el: Element) {
+                const parts: string[] = [];
+                if (el.id) parts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() ?? '');
+                parts.push(el.closest('label')?.textContent?.trim() ?? '');
+                parts.push(el.getAttribute('aria-label') ?? '');
+                parts.push((el as HTMLInputElement).placeholder ?? '');
+                return parts.filter(Boolean).join(' ');
+              }
+              function textFor(el: Element) {
+                if (el instanceof HTMLInputElement && ['button', 'submit', 'reset'].includes(el.type)) return el.value;
+                return el.textContent ?? '';
+              }
+              function attrText(el: Element) {
+                return [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder'), el.getAttribute('name'), el.getAttribute('role')].filter(Boolean).join(' ');
+              }
+              function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
+              async function waitForReplayElement(payload: Record<string, any>, kind: 'click' | 'type' | 'select') {
+                const deadline = Date.now() + 5000;
+                let el = findReplayElement(payload, kind);
+                while (!el && Date.now() < deadline) {
+                  await new Promise((resolve) => setTimeout(resolve, 100));
+                  el = findReplayElement(payload, kind);
+                }
+                return el;
+              }
+            }, args);
           return res.ok ? { ok: true, data: { clicked: args.selector } } : res;
         }
         if (args.iframe_selector) {
           const res = await execInFrame(tabId, args.iframe_selector as string,
-            (sel: string) => {
-              const el = document.querySelector(sel) as HTMLElement | null;
-              if (!el) return { ok: false, error: `Element not found in iframe: ${sel}` };
+            async (o: Record<string, any>) => {
+              const el = await waitForReplayElement(o, 'click') as HTMLElement | null;
+              if (!el) return { ok: false, error: `Element not found in iframe: ${o.selector}` };
               el.click();
               return { ok: true };
-            }, args.selector as string);
+              function findReplayElement(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
+                const selectors = [payload.selector, ...(Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type === 'css').map((c: any) => c.selector || c.value) : [])].filter(Boolean);
+                for (const selector of selectors) {
+                  try {
+                    const el = document.querySelector(selector);
+                    if (el && matchesKind(el, kind)) return el;
+                  } catch {}
+                }
+                return findBySemantic(payload, kind);
+              }
+              function matchesKind(el: Element, kind: 'click' | 'type' | 'select') {
+                if (kind === 'select') return el instanceof HTMLSelectElement;
+                if (kind === 'type') return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
+                return el instanceof HTMLElement;
+              }
+              function findBySemantic(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
+                const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
+                const selector = kind === 'click' ? 'button,a,[role="button"],input[type="button"],input[type="submit"],input[type="reset"],label,[onclick]' : kind === 'select' ? 'select' : 'input:not([type="hidden"]),textarea';
+                const elements = Array.from(document.querySelectorAll(selector));
+                for (const candidate of candidates) {
+                  const needle = normalize(candidate.value || '');
+                  const match = elements.find((el) => matchesKind(el, kind) && normalize([labelFor(el), textFor(el), attrText(el), (el as HTMLInputElement).name, el.id].filter(Boolean).join(' ')).includes(needle));
+                  if (match) return match;
+                }
+                return null;
+              }
+              function labelFor(el: Element) {
+                const parts: string[] = [];
+                if (el.id) parts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() ?? '');
+                parts.push(el.closest('label')?.textContent?.trim() ?? '');
+                parts.push(el.getAttribute('aria-label') ?? '');
+                parts.push((el as HTMLInputElement).placeholder ?? '');
+                return parts.filter(Boolean).join(' ');
+              }
+              function textFor(el: Element) {
+                if (el instanceof HTMLInputElement && ['button', 'submit', 'reset'].includes(el.type)) return el.value;
+                return el.textContent ?? '';
+              }
+              function attrText(el: Element) {
+                return [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder'), el.getAttribute('name'), el.getAttribute('role')].filter(Boolean).join(' ');
+              }
+              function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
+              async function waitForReplayElement(payload: Record<string, any>, kind: 'click' | 'type' | 'select') {
+                const deadline = Date.now() + 5000;
+                let el = findReplayElement(payload, kind);
+                while (!el && Date.now() < deadline) {
+                  await new Promise((resolve) => setTimeout(resolve, 100));
+                  el = findReplayElement(payload, kind);
+                }
+                return el;
+              }
+            }, args);
           return res.ok ? { ok: true, data: { clicked: args.selector } } : res;
         }
-        const res = await sendToContent(tabId, { type: 'DOM_CLICK', payload: { selector: args.selector } });
+        const res = await sendToContent(tabId, { type: 'DOM_CLICK', payload: args });
         return res.ok
           ? { ok: true, data: { clicked: args.selector } }
           : { ok: false, error: res.error };
@@ -342,31 +444,97 @@ export async function executeTool(
         const frameId = await resolveRecordedFrameId(tabId, args);
         if (frameId !== null) {
           const res = await execInFrameId(tabId, frameId,
-            (sel: string, text: string) => {
-              const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
-              if (!el) return { ok: false, error: `Input not found in frame: ${sel}` };
+            async (o: Record<string, any>) => {
+              const el = await waitForReplayElement(o) as HTMLInputElement | HTMLTextAreaElement | null;
+              if (!el) return { ok: false, error: `Input not found in frame: ${o.selector}` };
               el.focus();
-              el.value = text;
+              el.value = String(o.text ?? '');
               el.dispatchEvent(new Event('input', { bubbles: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
               return { ok: true };
-            }, args.selector as string, args.text as string);
+              function findReplayElement(payload: Record<string, any>): Element | null {
+                const selectors = [payload.selector, ...(Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type === 'css').map((c: any) => c.selector || c.value) : [])].filter(Boolean);
+                for (const selector of selectors) {
+                  try {
+                    const el = document.querySelector(selector);
+                    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el;
+                  } catch {}
+                }
+                const elements = Array.from(document.querySelectorAll('input:not([type="hidden"]),textarea')) as Array<HTMLInputElement | HTMLTextAreaElement>;
+                const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
+                for (const candidate of candidates) {
+                  const needle = normalize(candidate.value || '');
+                  const match = elements.find((el) => normalize([labelFor(el), el.placeholder, el.name, el.id, el.getAttribute('aria-label')].filter(Boolean).join(' ')).includes(needle));
+                  if (match) return match;
+                }
+                return null;
+              }
+              function labelFor(el: Element) {
+                const parts: string[] = [];
+                if (el.id) parts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() ?? '');
+                parts.push(el.closest('label')?.textContent?.trim() ?? '');
+                return parts.filter(Boolean).join(' ');
+              }
+              function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
+              async function waitForReplayElement(payload: Record<string, any>) {
+                const deadline = Date.now() + 5000;
+                let el = findReplayElement(payload);
+                while (!el && Date.now() < deadline) {
+                  await new Promise((resolve) => setTimeout(resolve, 100));
+                  el = findReplayElement(payload);
+                }
+                return el;
+              }
+            }, args);
           return res.ok ? { ok: true, data: { typed: args.text } } : res;
         }
         if (args.iframe_selector) {
           const res = await execInFrame(tabId, args.iframe_selector as string,
-            (sel: string, text: string) => {
-              const el = document.querySelector(sel) as HTMLInputElement | null;
-              if (!el) return { ok: false, error: `Input not found in iframe: ${sel}` };
+            async (o: Record<string, any>) => {
+              const el = await waitForReplayElement(o) as HTMLInputElement | HTMLTextAreaElement | null;
+              if (!el) return { ok: false, error: `Input not found in iframe: ${o.selector}` };
               el.focus();
-              el.value = text;
+              el.value = String(o.text ?? '');
               el.dispatchEvent(new Event('input', { bubbles: true }));
               el.dispatchEvent(new Event('change', { bubbles: true }));
               return { ok: true };
-            }, args.selector as string, args.text as string);
+              function findReplayElement(payload: Record<string, any>): Element | null {
+                const selectors = [payload.selector, ...(Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type === 'css').map((c: any) => c.selector || c.value) : [])].filter(Boolean);
+                for (const selector of selectors) {
+                  try {
+                    const el = document.querySelector(selector);
+                    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el;
+                  } catch {}
+                }
+                const elements = Array.from(document.querySelectorAll('input:not([type="hidden"]),textarea')) as Array<HTMLInputElement | HTMLTextAreaElement>;
+                const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
+                for (const candidate of candidates) {
+                  const needle = normalize(candidate.value || '');
+                  const match = elements.find((el) => normalize([labelFor(el), el.placeholder, el.name, el.id, el.getAttribute('aria-label')].filter(Boolean).join(' ')).includes(needle));
+                  if (match) return match;
+                }
+                return null;
+              }
+              function labelFor(el: Element) {
+                const parts: string[] = [];
+                if (el.id) parts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() ?? '');
+                parts.push(el.closest('label')?.textContent?.trim() ?? '');
+                return parts.filter(Boolean).join(' ');
+              }
+              function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
+              async function waitForReplayElement(payload: Record<string, any>) {
+                const deadline = Date.now() + 5000;
+                let el = findReplayElement(payload);
+                while (!el && Date.now() < deadline) {
+                  await new Promise((resolve) => setTimeout(resolve, 100));
+                  el = findReplayElement(payload);
+                }
+                return el;
+              }
+            }, args);
           return res.ok ? { ok: true, data: { typed: args.text } } : res;
         }
-        const res = await sendToContent(tabId, { type: 'DOM_TYPE', payload: { selector: args.selector, text: args.text } });
+        const res = await sendToContent(tabId, { type: 'DOM_TYPE', payload: args });
         return res.ok
           ? { ok: true, data: { typed: args.text } }
           : { ok: false, error: res.error };
@@ -376,27 +544,93 @@ export async function executeTool(
         const frameId = await resolveRecordedFrameId(tabId, args);
         if (frameId !== null) {
           const res = await execInFrameId(tabId, frameId,
-            (sel: string, value: string) => {
-              const el = document.querySelector(sel) as HTMLSelectElement | null;
-              if (!el) return { ok: false, error: `Select not found in frame: ${sel}` };
-              el.value = value;
+            async (o: Record<string, any>) => {
+              const el = await waitForReplayElement(o);
+              if (!el) return { ok: false, error: `Select not found in frame: ${o.selector}` };
+              el.value = String(o.value ?? '');
               el.dispatchEvent(new Event('change', { bubbles: true }));
               return { ok: true };
-            }, args.selector as string, args.value as string);
+              function findReplayElement(payload: Record<string, any>): HTMLSelectElement | null {
+                const selectors = [payload.selector, ...(Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type === 'css').map((c: any) => c.selector || c.value) : [])].filter(Boolean);
+                for (const selector of selectors) {
+                  try {
+                    const el = document.querySelector(selector);
+                    if (el instanceof HTMLSelectElement) return el;
+                  } catch {}
+                }
+                const elements = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[];
+                const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
+                for (const candidate of candidates) {
+                  const needle = normalize(candidate.value || '');
+                  const match = elements.find((el) => normalize([labelFor(el), el.name, el.id, el.getAttribute('aria-label')].filter(Boolean).join(' ')).includes(needle));
+                  if (match) return match;
+                }
+                return null;
+              }
+              function labelFor(el: Element) {
+                const parts: string[] = [];
+                if (el.id) parts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() ?? '');
+                parts.push(el.closest('label')?.textContent?.trim() ?? '');
+                return parts.filter(Boolean).join(' ');
+              }
+              function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
+              async function waitForReplayElement(payload: Record<string, any>) {
+                const deadline = Date.now() + 5000;
+                let el = findReplayElement(payload);
+                while (!el && Date.now() < deadline) {
+                  await new Promise((resolve) => setTimeout(resolve, 100));
+                  el = findReplayElement(payload);
+                }
+                return el;
+              }
+            }, args);
           return res.ok ? { ok: true, data: { selected: args.value } } : res;
         }
         if (args.iframe_selector) {
           const res = await execInFrame(tabId, args.iframe_selector as string,
-            (sel: string, value: string) => {
-              const el = document.querySelector(sel) as HTMLSelectElement | null;
-              if (!el) return { ok: false, error: `Select not found in iframe: ${sel}` };
-              el.value = value;
+            async (o: Record<string, any>) => {
+              const el = await waitForReplayElement(o);
+              if (!el) return { ok: false, error: `Select not found in iframe: ${o.selector}` };
+              el.value = String(o.value ?? '');
               el.dispatchEvent(new Event('change', { bubbles: true }));
               return { ok: true };
-            }, args.selector as string, args.value as string);
+              function findReplayElement(payload: Record<string, any>): HTMLSelectElement | null {
+                const selectors = [payload.selector, ...(Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type === 'css').map((c: any) => c.selector || c.value) : [])].filter(Boolean);
+                for (const selector of selectors) {
+                  try {
+                    const el = document.querySelector(selector);
+                    if (el instanceof HTMLSelectElement) return el;
+                  } catch {}
+                }
+                const elements = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[];
+                const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
+                for (const candidate of candidates) {
+                  const needle = normalize(candidate.value || '');
+                  const match = elements.find((el) => normalize([labelFor(el), el.name, el.id, el.getAttribute('aria-label')].filter(Boolean).join(' ')).includes(needle));
+                  if (match) return match;
+                }
+                return null;
+              }
+              function labelFor(el: Element) {
+                const parts: string[] = [];
+                if (el.id) parts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() ?? '');
+                parts.push(el.closest('label')?.textContent?.trim() ?? '');
+                return parts.filter(Boolean).join(' ');
+              }
+              function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
+              async function waitForReplayElement(payload: Record<string, any>) {
+                const deadline = Date.now() + 5000;
+                let el = findReplayElement(payload);
+                while (!el && Date.now() < deadline) {
+                  await new Promise((resolve) => setTimeout(resolve, 100));
+                  el = findReplayElement(payload);
+                }
+                return el;
+              }
+            }, args);
           return res.ok ? { ok: true, data: { selected: args.value } } : res;
         }
-        const res = await sendToContent(tabId, { type: 'DOM_SELECT', payload: { selector: args.selector, value: args.value } });
+        const res = await sendToContent(tabId, { type: 'DOM_SELECT', payload: args });
         return res.ok
           ? { ok: true, data: { selected: args.value } }
           : { ok: false, error: res.error };
@@ -840,10 +1074,10 @@ export async function executeTool(
       }
 
       case 'trigger_event': {
-        type TriggerArgs = { selector: string; event: string; key?: string };
+        type TriggerArgs = { selector: string; event: string; key?: string; locatorCandidates?: Array<Record<string, unknown>> };
         const a = args as unknown as TriggerArgs;
-        const fireEvent = (o: TriggerArgs) => {
-          const els = Array.from(document.querySelectorAll(o.selector)) as HTMLElement[];
+        const fireEvent = async (o: TriggerArgs) => {
+          const els = await waitForReplayElements(o);
           for (const el of els) {
             let evt: Event;
             if (['keydown', 'keyup', 'keypress'].includes(o.event)) {
@@ -867,6 +1101,58 @@ export async function executeTool(
             if (o.event === 'blur')  el.blur?.();
           }
           return { ok: true as const, count: els.length };
+          function findReplayElements(payload: TriggerArgs): HTMLElement[] {
+            const found: HTMLElement[] = [];
+            const selectors = [
+              payload.selector,
+              ...((Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates : [])
+                .filter((candidate) => candidate.type === 'css')
+                .map((candidate) => String(candidate.selector ?? candidate.value ?? ''))),
+            ].filter(Boolean);
+            for (const selector of selectors) {
+              try {
+                for (const el of Array.from(document.querySelectorAll(selector)) as HTMLElement[]) {
+                  if (!found.includes(el)) found.push(el);
+                }
+              } catch {}
+            }
+            if (found.length > 0) return found;
+
+            const semantic = (Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates : []).filter((candidate) => candidate.type !== 'css');
+            const elements = Array.from(document.querySelectorAll('button,a,[role="button"],input,textarea,select,form,label,[onclick]')) as HTMLElement[];
+            for (const candidate of semantic) {
+              const needle = normalize(String(candidate.value ?? ''));
+              if (!needle) continue;
+              const match = elements.find((el) => normalize([labelFor(el), textFor(el), attrText(el), (el as HTMLInputElement).name, el.id].filter(Boolean).join(' ')).includes(needle));
+              if (match && !found.includes(match)) found.push(match);
+            }
+            return found;
+          }
+          function labelFor(el: Element) {
+            const parts: string[] = [];
+            if (el.id) parts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() ?? '');
+            parts.push(el.closest('label')?.textContent?.trim() ?? '');
+            parts.push(el.getAttribute('aria-label') ?? '');
+            parts.push((el as HTMLInputElement).placeholder ?? '');
+            return parts.filter(Boolean).join(' ');
+          }
+          function textFor(el: Element) {
+            if (el instanceof HTMLInputElement && ['button', 'submit', 'reset'].includes(el.type)) return el.value;
+            return el.textContent ?? '';
+          }
+          function attrText(el: Element) {
+            return [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder'), el.getAttribute('name'), el.getAttribute('role')].filter(Boolean).join(' ');
+          }
+          function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
+          async function waitForReplayElements(payload: TriggerArgs): Promise<HTMLElement[]> {
+            const deadline = Date.now() + 5000;
+            let elements = findReplayElements(payload);
+            while (elements.length === 0 && Date.now() < deadline) {
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              elements = findReplayElements(payload);
+            }
+            return elements;
+          }
         };
         const frameId = await resolveRecordedFrameId(tabId, args);
         if (frameId !== null) {

@@ -460,6 +460,95 @@ test('records manual form actions and replays same or random data', async ({ con
   });
 });
 
+test('replays recorded flows after primary selectors drift', async ({ context, extensionId }) => {
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <form id="driftForm">
+          <label for="first-v1">First name</label>
+          <input id="first-v1" name="firstName" autocomplete="given-name">
+          <label for="email-v1">Email</label>
+          <input id="email-v1" name="email" type="email">
+          <button id="submit-v1" type="submit">Submit Booking</button>
+        </form>
+        <script>
+          window.__submits = [];
+          document.querySelector('#driftForm').addEventListener('submit', (event) => {
+            event.preventDefault();
+            window.__submits.push(Object.fromEntries(new FormData(event.currentTarget).entries()));
+          });
+        </script>
+      </body>
+    </html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+    await target.locator('#first-v1').fill('Selector');
+    await target.locator('#email-v1').fill('selector.drift@example.com');
+    await target.locator('#submit-v1').click();
+
+    const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+    const steps = stopped.steps ?? [];
+    expect(steps.some((step: any) => Array.isArray(step.args?.locatorCandidates) && step.args.locatorCandidates.length > 1)).toBe(true);
+
+    await target.evaluate(() => {
+      document.querySelector('#first-v1')?.setAttribute('id', 'first-v2');
+      document.querySelector('label[for="first-v1"]')?.setAttribute('for', 'first-v2');
+      document.querySelector('#email-v1')?.setAttribute('id', 'email-v2');
+      document.querySelector('label[for="email-v1"]')?.setAttribute('for', 'email-v2');
+      document.querySelector('#submit-v1')?.setAttribute('id', 'submit-v2');
+      (window as any).__submits = [];
+    });
+
+    const flow = { id: 'flow_selector_drift', name: 'Selector drift', domain: '127.0.0.1', createdAt: Date.now(), steps, stepCount: steps.length };
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results).toHaveLength(1);
+    expect(results[0].ok).toBe(true);
+    const submits = await target.evaluate(() => (window as any).__submits);
+    expect(submits).toEqual([{ firstName: 'Selector', email: 'selector.drift@example.com' }]);
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
+test('captures replay diagnostics on failure', async ({ context, extensionId }) => {
+  const html = `<!doctype html><html><body><h1>Debug Target</h1></body></html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    const flow = {
+      id: 'flow_failure_debug',
+      name: 'Failure debug',
+      domain: '127.0.0.1',
+      createdAt: Date.now(),
+      stepCount: 1,
+      steps: [{ tool: 'type_text', args: { selector: '#missing-input', text: 'never' } }],
+    };
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results).toHaveLength(1);
+    expect(results[0].ok).toBe(false);
+    expect(results[0].debug?.url).toContain(baseUrl);
+    expect(results[0].debug?.pageTextSnippet).toContain('Debug Target');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('replays recorded actions inside an iframe', async ({ context, extensionId }) => {
   const frameHtml = `<!doctype html>
     <html>

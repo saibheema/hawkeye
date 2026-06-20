@@ -742,6 +742,7 @@ function FlowsPanel() {
                   <>
                     {pill('FAIL', C.red, '#fce8e6')}
                     <span style={{ color: C.red, overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.result?.error}</span>
+                    {e.result?.debug?.screenshotKey && pill('SNAP', C.yellow, '#fef7e0')}
                   </>
                 )}
               </div>

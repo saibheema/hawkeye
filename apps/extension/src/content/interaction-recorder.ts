@@ -3,7 +3,7 @@
  */
 
 import type { ExtensionMessage } from '@hawkeye/types';
-import { getSelector } from './dom-reader.js';
+import { getLocatorCandidates, getSelector } from './dom-reader.js';
 
 type DataKind =
   | 'name'
@@ -69,7 +69,7 @@ function recordClick(event: MouseEvent) {
     if (form) suppressSubmitUntil.set(form, Date.now() + 1500);
     const steps = [
       ...formSteps,
-      { tool: 'click', args: { selector: getSelector(el) }, meta: { source: 'manual', label: labelFor(el) } },
+      { tool: 'click', args: locatorArgs(el), meta: { source: 'manual', label: labelFor(el) } },
     ];
     if (form) {
       event.preventDefault();
@@ -79,7 +79,7 @@ function recordClick(event: MouseEvent) {
     sendSteps(steps);
     return;
   }
-  sendStep('click', { selector: getSelector(el) }, { source: 'manual', label: labelFor(el) });
+  sendStep('click', locatorArgs(el), { source: 'manual', label: labelFor(el) });
 }
 
 function recordInput(event: Event) {
@@ -99,17 +99,16 @@ function inputStepFromElement(target: EventTarget | null): RecordedStep | null {
   const el = target;
   if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) return null;
 
-  const selector = getSelector(el);
   const label = labelFor(el);
 
   if (el instanceof HTMLSelectElement) {
     return {
       tool: 'select_option',
-      args: { selector, value: el.value },
+      args: locatorArgs(el, { value: el.value }),
       meta: {
-      source: 'manual',
-      label,
-      originalValue: el.value,
+        source: 'manual',
+        label,
+        originalValue: el.value,
       },
     };
   }
@@ -120,7 +119,7 @@ function inputStepFromElement(target: EventTarget | null): RecordedStep | null {
 
   return {
     tool: 'type_text',
-    args: { selector, text: el.value },
+    args: locatorArgs(el, { text: el.value }),
     meta: {
       source: 'manual',
       dataKind: inferDataKind(el, label),
@@ -136,20 +135,19 @@ function recordKeyDown(event: KeyboardEvent) {
   if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) return;
   if (el instanceof HTMLTextAreaElement && !event.metaKey && !event.ctrlKey) return;
 
-  const selector = getSelector(el);
   const label = labelFor(el);
   const steps: RecordedStep[] = [];
 
   if (el instanceof HTMLSelectElement) {
     steps.push({
       tool: 'select_option',
-      args: { selector, value: el.value },
+      args: locatorArgs(el, { value: el.value }),
       meta: { source: 'manual', label, originalValue: el.value },
     });
   } else if (!(el instanceof HTMLInputElement && ['button', 'submit', 'reset', 'checkbox', 'radio'].includes(el.type))) {
     steps.push({
       tool: 'type_text',
-      args: { selector, text: el.value },
+      args: locatorArgs(el, { text: el.value }),
       meta: {
         source: 'manual',
         dataKind: inferDataKind(el, label),
@@ -161,7 +159,7 @@ function recordKeyDown(event: KeyboardEvent) {
 
   steps.push({
     tool: 'trigger_event',
-    args: { selector, event: 'keydown', key: 'Enter' },
+    args: locatorArgs(el, { event: 'keydown', key: 'Enter' }),
     meta: { source: 'manual', label: 'Enter key' },
   });
   if (el.form) {
@@ -181,10 +179,9 @@ function recordSubmit(event: SubmitEvent) {
   if ((suppressSubmitUntil.get(form) ?? 0) > Date.now()) return;
   event.preventDefault();
   const formSteps = getFormStateSteps(form);
-  const selector = getSelector(form);
   void flushStepsThenSubmit(form, [
     ...formSteps,
-    { tool: 'trigger_event', args: { selector, event: 'submit' }, meta: { source: 'manual', label: labelFor(form) || 'Submit form' } },
+    { tool: 'trigger_event', args: locatorArgs(form, { event: 'submit' }), meta: { source: 'manual', label: labelFor(form) || 'Submit form' } },
   ]);
 }
 
@@ -221,13 +218,12 @@ function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {
   const steps: RecordedStep[] = [];
   for (const el of Array.from(form.elements)) {
     if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) continue;
-    const selector = getSelector(el);
     const label = labelFor(el);
 
     if (el instanceof HTMLSelectElement) {
       steps.push({
         tool: 'select_option',
-        args: { selector, value: el.value },
+        args: locatorArgs(el, { value: el.value }),
         meta: { source: 'manual', label, originalValue: el.value },
       });
       continue;
@@ -238,7 +234,7 @@ function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {
 
     steps.push({
       tool: 'type_text',
-      args: { selector, text: el.value },
+      args: locatorArgs(el, { text: el.value }),
       meta: {
         source: 'manual',
         dataKind: inferDataKind(el, label),
@@ -248,6 +244,14 @@ function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {
     });
   }
   return steps;
+}
+
+function locatorArgs(el: Element, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    selector: getSelector(el),
+    locatorCandidates: getLocatorCandidates(el),
+    ...extra,
+  };
 }
 
 function sendStep(tool: string, args: Record<string, unknown>, meta?: Record<string, unknown>) {

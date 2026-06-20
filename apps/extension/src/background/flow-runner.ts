@@ -128,8 +128,17 @@ export interface RunResult {
   failedStep?: number;
   failedTool?: string;
   error?: string;
+  debug?: ReplayDebug;
   testData: TestData;
   durationMs: number;
+}
+
+export interface ReplayDebug {
+  url?: string;
+  title?: string;
+  pageTextSnippet?: string;
+  screenshotKey?: string;
+  screenshotCaptured?: boolean;
 }
 
 export type ReplayProgressFn = (event: {
@@ -163,6 +172,7 @@ export async function replayFlow(
     let failedStep: number | undefined;
     let failedTool: string | undefined;
     let error: string | undefined;
+    let debug: ReplayDebug | undefined;
 
     for (let si = 0; si < flow.steps.length; si++) {
       const step: FlowStep = flow.steps[si];
@@ -176,6 +186,7 @@ export async function replayFlow(
         failedStep = si;
         failedTool = step.tool;
         error = res.error;
+        debug = await captureReplayDebug(tabId);
         break;
       }
 
@@ -189,6 +200,7 @@ export async function replayFlow(
       failedStep,
       failedTool,
       error,
+      debug,
       testData,
       durationMs: Date.now() - t0,
     };
@@ -203,4 +215,36 @@ export async function replayFlow(
 
   onProgress({ type: 'all_done', runIndex: repeatCount - 1, total: repeatCount, results });
   return results;
+}
+
+async function captureReplayDebug(tabId: number): Promise<ReplayDebug> {
+  const debug: ReplayDebug = {};
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    debug.url = tab.url;
+    debug.title = tab.title;
+    const textResult = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => document.body?.innerText?.replace(/\s+/g, ' ').trim().slice(0, 2000) ?? '',
+    });
+    debug.pageTextSnippet = textResult?.[0]?.result ?? '';
+    if (typeof tab.windowId === 'number') {
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+      const screenshotKey = `hawkeye_replay_snapshot_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      await chrome.storage.local.set({
+        [screenshotKey]: {
+          dataUrl,
+          url: debug.url,
+          title: debug.title,
+          createdAt: Date.now(),
+        },
+      });
+      debug.screenshotKey = screenshotKey;
+      debug.screenshotCaptured = true;
+    }
+  } catch (err) {
+    debug.screenshotCaptured = false;
+    debug.pageTextSnippet = debug.pageTextSnippet || String(err instanceof Error ? err.message : err).slice(0, 500);
+  }
+  return debug;
 }

@@ -393,6 +393,8 @@ export function Dashboard() {
                       <>
                         <Badge tone="red">FAIL</Badge>
                         <span className="error">{event.result?.error}</span>
+                        {event.result?.debug?.screenshotKey && <Badge tone="amber">snapshot</Badge>}
+                        {event.result?.debug?.url && <code>{event.result.debug.url}</code>}
                       </>
                     )}
                   </div>
