@@ -28,6 +28,16 @@ export type AgentHistoryMessage = { role: 'user' | 'agent'; text: string };
 const REQUIRES_PERMISSION = new Set(['navigate']);
 
 const MAX_ITERATIONS = 10;
+const PAGE_MUTATION_TOOLS = new Set([
+  'replace_text',
+  'dom_op',
+  'insert_css',
+  'set_style',
+  'style_by_text',
+  'set_placeholder_by_label',
+  'insert_html',
+  'set_css_var',
+]);
 const SYSTEM_PROMPT = `You are Hawkeye, an expert browser automation AI.
 You have access to tools to interact with the current web page.
 Your job is to complete the user's task precisely and efficiently.
@@ -149,6 +159,19 @@ function cleanTargetText(value: string): string {
       .trim();
   }
   return cleaned;
+}
+
+function getSuccessfulMutationSummary(tool: string, data: unknown): string | null {
+  if (!PAGE_MUTATION_TOOLS.has(tool)) return null;
+  const d = (data ?? {}) as Record<string, unknown>;
+  const count = Number(d.replaced ?? d.affected ?? d.insertedCount ?? d.count ?? 0);
+
+  if (tool === 'insert_css' && d.injected) return 'Done. I applied the CSS change.';
+  if (tool === 'insert_html' && d.inserted) return 'Done. I inserted the requested content.';
+  if (tool === 'set_css_var' && d.set) return `Done. I updated ${String(d.set)}.`;
+  if (Number.isFinite(count) && count > 0) return `Done. I updated ${count} matching element${count === 1 ? '' : 's'}.`;
+
+  return null;
 }
 
 export async function runAgent(
@@ -319,6 +342,14 @@ export async function runAgent(
       });
 
       toolResultParts.push(`Tool ${name} result: ${resultStr}`);
+
+      if (result.ok) {
+        const summary = getSuccessfulMutationSummary(name, result.data);
+        if (summary) {
+          onStep({ type: 'answer', content: summary });
+          return summary;
+        }
+      }
     }
 
     // Feed tool results back to LLM

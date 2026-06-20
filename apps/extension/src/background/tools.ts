@@ -585,11 +585,10 @@ export async function executeTool(
         type DomOpArgs = { op: string; selector: string; value?: string; attr?: string };
         const op = args as unknown as DomOpArgs;
         const results = await chrome.scripting.executeScript({
-          target: { tabId },
+          target: { tabId, allFrames: true },
           world: 'MAIN',
           func: (o: DomOpArgs) => {
             const els = Array.from(document.querySelectorAll(o.selector)) as HTMLElement[];
-            if (els.length === 0) return { ok: false, error: `No elements match selector: ${o.selector}` };
             for (const el of els) {
               switch (o.op) {
                 case 'set_text':     el.innerText = o.value ?? ''; break;
@@ -606,9 +605,11 @@ export async function executeTool(
           },
           args: [op],
         });
-        const r = results?.[0]?.result ?? { ok: false, error: 'No result from executeScript' };
-        if (!r.ok) return { ok: false, error: r.error };
-        return { ok: true, data: { affected: r.count } };
+        const failed = results.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const affected = results.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (affected === 0) return { ok: false, error: `No elements match selector: ${op.selector}` };
+        return { ok: true, data: { affected } };
       }
 
       case 'insert_css': {
@@ -634,11 +635,10 @@ export async function executeTool(
         type SetStyleArgs = { selector: string; property: string; value: string };
         const a = args as unknown as SetStyleArgs;
         const res = await chrome.scripting.executeScript({
-          target: { tabId },
+          target: { tabId, allFrames: true },
           world: 'MAIN',
           func: (o: SetStyleArgs) => {
             const els = Array.from(document.querySelectorAll(o.selector)) as HTMLElement[];
-            if (els.length === 0) return { ok: false, error: `No elements: ${o.selector}` };
             // Accept both camelCase and kebab-case property names
             const prop = o.property.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
             for (const el of els) (el.style as any)[prop] = o.value;
@@ -646,64 +646,70 @@ export async function executeTool(
           },
           args: [a],
         });
-        const r = res?.[0]?.result ?? { ok: false, error: 'No result' };
-        if (!r.ok) return { ok: false, error: r.error };
-        return { ok: true, data: { affected: r.count } };
+        const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (affected === 0) return { ok: false, error: `No elements match selector: ${a.selector}` };
+        return { ok: true, data: { affected } };
       }
 
       case 'insert_html': {
         type InsertHtmlArgs = { selector: string; position: InsertPosition; html: string };
         const a = args as unknown as InsertHtmlArgs;
         const res = await chrome.scripting.executeScript({
-          target: { tabId },
+          target: { tabId, allFrames: true },
           world: 'MAIN',
           func: (o: InsertHtmlArgs) => {
-            const el = document.querySelector(o.selector);
-            if (!el) return { ok: false, error: `Element not found: ${o.selector}` };
-            el.insertAdjacentHTML(o.position, o.html);
-            return { ok: true };
+            const els = Array.from(document.querySelectorAll(o.selector));
+            for (const el of els) el.insertAdjacentHTML(o.position, o.html);
+            return { ok: true, count: els.length };
           },
           args: [a],
         });
-        const r = res?.[0]?.result ?? { ok: false, error: 'No result' };
-        if (!r.ok) return { ok: false, error: r.error };
-        return { ok: true, data: { inserted: true } };
+        const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const insertedCount = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (insertedCount === 0) return { ok: false, error: `No elements match selector: ${a.selector}` };
+        return { ok: true, data: { inserted: true, insertedCount } };
       }
 
       case 'trigger_event': {
         type TriggerArgs = { selector: string; event: string; key?: string };
         const a = args as unknown as TriggerArgs;
         const res = await chrome.scripting.executeScript({
-          target: { tabId },
+          target: { tabId, allFrames: true },
           world: 'MAIN',
           func: (o: TriggerArgs) => {
-            const el = document.querySelector(o.selector) as HTMLElement | null;
-            if (!el) return { ok: false, error: `Element not found: ${o.selector}` };
-            let evt: Event;
-            if (['keydown', 'keyup', 'keypress'].includes(o.event)) {
-              evt = new KeyboardEvent(o.event, { key: o.key ?? '', bubbles: true, cancelable: true });
-            } else if (['click', 'dblclick', 'mouseover', 'mouseout', 'mouseenter', 'mouseleave'].includes(o.event)) {
-              evt = new MouseEvent(o.event, { bubbles: true, cancelable: true });
-            } else {
-              evt = new Event(o.event, { bubbles: true, cancelable: true });
+            const els = Array.from(document.querySelectorAll(o.selector)) as HTMLElement[];
+            for (const el of els) {
+              let evt: Event;
+              if (['keydown', 'keyup', 'keypress'].includes(o.event)) {
+                evt = new KeyboardEvent(o.event, { key: o.key ?? '', bubbles: true, cancelable: true });
+              } else if (['click', 'dblclick', 'mouseover', 'mouseout', 'mouseenter', 'mouseleave'].includes(o.event)) {
+                evt = new MouseEvent(o.event, { bubbles: true, cancelable: true });
+              } else {
+                evt = new Event(o.event, { bubbles: true, cancelable: true });
+              }
+              el.dispatchEvent(evt);
+              if (o.event === 'focus') el.focus?.();
+              if (o.event === 'blur')  el.blur?.();
             }
-            el.dispatchEvent(evt);
-            if (o.event === 'focus') (el as HTMLElement).focus?.();
-            if (o.event === 'blur')  (el as HTMLElement).blur?.();
-            return { ok: true };
+            return { ok: true, count: els.length };
           },
           args: [a],
         });
-        const r = res?.[0]?.result ?? { ok: false, error: 'No result' };
-        if (!r.ok) return { ok: false, error: r.error };
-        return { ok: true, data: { fired: args.event } };
+        const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (affected === 0) return { ok: false, error: `No elements match selector: ${a.selector}` };
+        return { ok: true, data: { fired: args.event, affected } };
       }
 
       case 'get_property': {
         type GetPropArgs = { selector: string; kind: string; name?: string };
         const a = args as unknown as GetPropArgs;
         const res = await chrome.scripting.executeScript({
-          target: { tabId },
+          target: { tabId, allFrames: true },
           world: 'MAIN',
           func: (o: GetPropArgs) => {
             if (o.kind === 'count') {
@@ -729,9 +735,13 @@ export async function executeTool(
           },
           args: [a],
         });
-        const r = res?.[0]?.result ?? { ok: false, error: 'No result' };
-        if (!r.ok) return { ok: false, error: r.error };
-        return { ok: true, data: { value: r.value } };
+        if (a.kind === 'count') {
+          const value = res.reduce((sum, frameResult) => sum + (Number((frameResult.result as any)?.value) || 0), 0);
+          return { ok: true, data: { value } };
+        }
+        const match = res.find((frameResult) => (frameResult.result as any)?.ok);
+        if (!match?.result) return { ok: false, error: `Not found: ${a.selector}` };
+        return { ok: true, data: { value: (match.result as any).value } };
       }
 
       case 'replace_text': {
@@ -762,6 +772,7 @@ export async function executeTool(
         const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
         if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
         const replaced = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (replaced === 0) return { ok: false, error: `No visible text matched: ${a.find}` };
         return { ok: true, data: { replaced } };
       }
 
@@ -808,6 +819,7 @@ export async function executeTool(
         const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
         if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
         const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (affected === 0) return { ok: false, error: `No visible element matched text: ${a.text}` };
         return { ok: true, data: { affected } };
       }
 
@@ -818,7 +830,10 @@ export async function executeTool(
           target: { tabId, allFrames: true },
           world: 'MAIN',
           func: (o: PlaceholderArgs) => {
-            const needle = o.label.trim().toLowerCase();
+            const needle = o.label.trim().toLowerCase()
+              .replace(/\b(?:text\s*box|textbox|input|field|label|placeholder)\b/g, '')
+              .replace(/\s+/g, ' ')
+              .trim();
             if (!needle) return { ok: true as const, count: 0 };
 
             function textOf(el: Element | null): string {
@@ -858,6 +873,7 @@ export async function executeTool(
         const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
         if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
         const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (affected === 0) return { ok: false, error: `No input matched label: ${a.label}` };
         return { ok: true, data: { affected } };
       }
 
