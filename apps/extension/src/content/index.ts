@@ -8,12 +8,14 @@ import { initPersistedDomMutations } from './persisted-dom-mutations.js';
 
 declare global {
   interface Window {
-    __hawkeyeContentInitialized?: boolean;
+    __hawkeyeContentInitialized?: string;
   }
 }
 
-if (!window.__hawkeyeContentInitialized) {
-  window.__hawkeyeContentInitialized = true;
+const contentBuildId = import.meta.url;
+
+if (window.__hawkeyeContentInitialized !== contentBuildId) {
+  window.__hawkeyeContentInitialized = contentBuildId;
   initPageObserver();
   initElementPicker();
   initInteractionRecorder();

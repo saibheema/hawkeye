@@ -418,6 +418,13 @@ function FlowsPanel() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!recording) {
       chrome.runtime.sendMessage({ type: 'FLOW_RECORD_START', tabId: tab?.id }, (res) => {
+        if (!res?.ok) {
+          setRecording(false);
+          setRecordedSteps([]);
+          setRecordedStepCount(0);
+          setReplayLog((prev) => [...prev, { type: 'run_done', runIndex: 0, total: 1, result: { ok: false, error: res?.error ?? 'Recorder could not attach to this tab.' } }]);
+          return;
+        }
         setRecording(true);
         setRecordedSteps([]);
         setRecordedStepCount(0);

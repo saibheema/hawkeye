@@ -176,7 +176,19 @@ async function handleMessage(
         if (!tabId) { sendResponse({ error: 'no tab' }); break; }
         const tab = await chrome.tabs.get(tabId).catch(() => null);
         startRecording(tabId, { startUrl: tab?.url, startTitle: tab?.title });
-        chrome.tabs.sendMessage(tabId, { type: 'FLOW_RECORD_START', payload: {} }, () => { void chrome.runtime.lastError; });
+        await injectConfiguredContentScripts(tabId);
+        const startAck = await sendToTab(tabId, { type: 'FLOW_RECORD_START', payload: {} });
+        if (!startAck?.ok) {
+          const state = stopRecording(tabId);
+          sendResponse({
+            ok: false,
+            error: startAck?.error ?? 'Could not attach recorder to this tab. Refresh the page or use a normal http/https page.',
+            steps: state.steps,
+            startUrl: state.startUrl,
+            startTitle: state.startTitle,
+          });
+          break;
+        }
         sendResponse({ ok: true, startUrl: tab?.url, startTitle: tab?.title });
         break;
       }
@@ -332,6 +344,30 @@ async function captureSnapshot(tabId: number) {
     return results[0]?.result ?? null;
   } catch (e: any) {
     return { error: e.message };
+  }
+}
+
+function sendToTab(tabId: number, message: unknown): Promise<any> {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, message, (res) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        resolve({ ok: false, error: error.message });
+        return;
+      }
+      resolve(res ?? { ok: false, error: 'No response from content script' });
+    });
+  });
+}
+
+async function injectConfiguredContentScripts(tabId: number): Promise<void> {
+  const manifest = chrome.runtime.getManifest();
+  const scripts = manifest.content_scripts?.flatMap((script) => script.js ?? []) ?? [];
+  if (scripts.length === 0) return;
+  try {
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: scripts });
+  } catch {
+    // Restricted pages and mid-navigation tabs cannot be injected.
   }
 }
 

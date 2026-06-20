@@ -19,6 +19,7 @@ export function initPageObserver() {
   // Listen for messages from service worker / side panel
   chrome.runtime.onMessage.addListener(
     (message: ExtensionMessage, _sender, sendResponse) => {
+      if (!isPageObserverMessage(message.type)) return false;
       handleContentMessage(message, sendResponse);
       return true;
     }
@@ -51,6 +52,19 @@ export function initPageObserver() {
   } else {
     document.addEventListener('DOMContentLoaded', attachObserver, { once: true });
   }
+}
+
+function isPageObserverMessage(type: string): boolean {
+  return [
+    'DOM_ANALYZE',
+    'DOM_QUERY',
+    'DOM_CLICK',
+    'DOM_TYPE',
+    'DOM_SELECT',
+    'DOM_SCROLL',
+    'PAGE_SNAPSHOT',
+    'RUN_SCRIPT',
+  ].includes(type);
 }
 
 async function handleContentMessage(
