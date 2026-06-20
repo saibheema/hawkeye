@@ -1026,6 +1026,45 @@ test('agent direct button label command updates input button values', async ({ c
   });
 });
 
+test('agent direct icon command updates icon-only controls', async ({ context, extensionId }) => {
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <button id="addButton" aria-label="Add" title="Add">
+          <svg width="20" height="20" aria-hidden="true"><title>plus</title><path d="M10 3v14M3 10h14"></path></svg>
+        </button>
+      </body>
+    </html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    await target.locator('#addButton').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    const response = await sendExtensionMessage(extensionPage, {
+      type: 'AGENT_RUN',
+      tabId,
+      payload: {
+        task: 'change + icon to X icon',
+        history: [],
+        apiKey: 'not-needed-for-direct-icon',
+        provider: 'gemini',
+      },
+    });
+    expect(response?.started).toBe(true);
+
+    await expect(target.locator('#addButton')).toHaveText('X');
+    await expect(target.locator('#addButton')).toHaveAttribute('aria-label', 'X');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('live Avis Ford scheduler records through contact screen without booking', async ({
   context,
   extensionId,

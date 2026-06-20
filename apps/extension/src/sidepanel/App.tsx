@@ -145,11 +145,10 @@ export function App() {
 // ─── Chat Panel ───────────────────────────────────────────────────────────────
 
 type ChatMsg = { role: 'user' | 'agent'; text: string; isError?: boolean };
+const CHAT_GREETING: ChatMsg = { role: 'agent', text: 'Hi! I\'m Hawkeye. Tell me what to do on this page and I\'ll handle it.' };
 
 function ChatPanel() {
-  const [messages, setMessages] = useState<ChatMsg[]>([
-    { role: 'agent', text: 'Hi! I\'m Hawkeye. Tell me what to do on this page and I\'ll handle it.' },
-  ]);
+  const [messages, setMessages] = useState<ChatMsg[]>([CHAT_GREETING]);
   const [chatKey, setChatKey] = useState<string | null>(null);
   const [chatLoaded, setChatLoaded] = useState(false);
   const [input, setInput] = useState('');
@@ -234,7 +233,10 @@ function ChatPanel() {
     }
     if (key !== apiKey) setApiKey(key);
     const task = input.trim();
-    const history = messages.slice(-12).map((m) => ({ role: m.role, text: m.text }));
+    const history = messages
+      .filter((m) => !m.isError && m.text !== CHAT_GREETING.text)
+      .slice(-8)
+      .map((m) => ({ role: m.role, text: m.text }));
     setInput('');
     setRunning(true);
     setStatusLine('Reading page…');
@@ -247,6 +249,12 @@ function ChatPanel() {
       return;
     }
     chrome.runtime.sendMessage({ type: 'AGENT_RUN', tabId: tab.id, payload: { task, history, apiKey: key, provider: 'gemini' } });
+  };
+
+  const clearChat = () => {
+    setMessages([CHAT_GREETING]);
+    setStatusLine('');
+    if (chatKey) chrome.storage.local.remove(chatKey);
   };
 
   return (
@@ -285,6 +293,14 @@ function ChatPanel() {
 
       {/* Input bar */}
       <div style={{ padding: '10px 12px', borderTop: `1px solid ${C.border}`, display: 'flex', gap: 8, alignItems: 'center', background: C.bg }}>
+        <button
+          onClick={clearChat}
+          disabled={running || messages.length <= 1}
+          title="Clear chat context for this tab"
+          style={{ background: C.bgHover, border: `1px solid ${C.border}`, borderRadius: C.radiusSm, padding: '7px 8px', color: running || messages.length <= 1 ? C.textMuted : C.textSecond, fontSize: 11, fontWeight: 600, cursor: running || messages.length <= 1 ? 'not-allowed' : 'pointer', fontFamily: C.font, whiteSpace: 'nowrap' }}
+        >
+          Clear
+        </button>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}

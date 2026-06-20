@@ -38,6 +38,7 @@ const PAGE_MUTATION_TOOLS = new Set([
   'add_dropdown_option',
   'insert_html',
   'set_css_var',
+  'replace_icon',
 ]);
 const SYSTEM_PROMPT = `You are Hawkeye, an expert browser automation AI.
 You have access to tools to interact with the current web page.
@@ -68,6 +69,7 @@ Tool selection — pick the right one immediately:
 - Change an input placeholder by label/nearby text → set_placeholder_by_label
 - Add an option to a dropdown/select by label → add_dropdown_option
 - Re-theme with CSS variables → set_css_var
+- Change icon-only controls ("change + icon to X", "replace search icon with close") → replace_icon
 - Remove elements → dom_op (op: remove)
 - Change attributes (href, placeholder, src) → dom_op (op: set_attr)
 - Add new HTML nodes → insert_html
@@ -88,6 +90,9 @@ Visual / UI changes — choose the right tool:
   Example: add_dropdown_option({ label: "Make", optionLabel: "ROD", optionValue: "ROD" })
 - **set_css_var**: Set a CSS custom property (design token) to re-theme sites that use variables.
   Example: set_css_var({ variable: "--primary-color", value: "#ff5722" })
+- **replace_icon**: Replace icon-only buttons or controls by glyph/accessibility label/SVG title/common icon name.
+  Example: replace_icon({ target: "+", replacement: "X" })
+  Example: replace_icon({ target: "search", replacement: "close" })
 - **dom_op**: Change text/HTML content, attributes, remove elements, or toggle classes.
   Example: dom_op({ op: "set_text", selector: "h1", value: "Welcome back!" })
   Example: dom_op({ op: "remove", selector: ".cookie-popup" })
@@ -204,6 +209,33 @@ function parseDirectDropdownOption(message: string): { label: string; optionLabe
   return { label, optionLabel, optionValue: optionLabel };
 }
 
+function parseDirectIconReplacement(message: string): { target: string; replacement: string } | null {
+  const normalized = message
+    .trim()
+    .replace(/^[\s"'`]*(?:can you|please|pls)\s+/i, '')
+    .replace(/\s+please[?.!]?$/i, '');
+
+  if (!/\bicon\b/i.test(normalized)) return null;
+  const match =
+    normalized.match(/^(?:change|replace|rename|set)\s+(.+?)\s+(?:icon\s+)?(?:to|with|as)\s+(.+?)$/i)
+    ?? normalized.match(/^(?:change|replace|rename|set)\s+(?:the\s+)?icon\s+(.+?)\s+(?:to|with|as)\s+(.+?)$/i);
+  if (!match) return null;
+
+  const target = cleanIconText(match[1]);
+  const replacement = cleanIconText(match[2]);
+  if (!target || !replacement || target.length > 100 || replacement.length > 100) return null;
+  return { target, replacement };
+}
+
+function cleanIconText(value: string): string {
+  return value
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/\b(?:the\s+)?icon\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function looksLikeColor(value: string): boolean {
   return /^(?:#[0-9a-f]{3,8}|rgb\(|hsl\(|red|blue|green|yellow|black|white|gray|grey|orange|purple|pink|brown|cyan|magenta|lime|navy|teal|transparent)\b/i.test(value.trim());
 }
@@ -296,6 +328,37 @@ export async function runAgent(
   onStep: StepCallback,
   permissionGate: (action: string, args: Record<string, unknown>) => Promise<boolean>
 ): Promise<string> {
+  const directIconReplacement = parseDirectIconReplacement(userMessage);
+  if (directIconReplacement) {
+    onStep({
+      type: 'tool_call',
+      content: 'Calling replace_icon',
+      tool: 'replace_icon',
+      args: directIconReplacement,
+    });
+
+    const result = await executeTool('replace_icon', directIconReplacement, tabId);
+    onStep({
+      type: 'tool_result',
+      content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+      tool: 'replace_icon',
+      result: result.data ?? result.error,
+    });
+
+    if (result.ok) {
+      const affected = (result.data as { affected?: number } | undefined)?.affected ?? 0;
+      const answer = affected > 0
+        ? `Changed ${affected} matching icon${affected === 1 ? '' : 's'} to "${directIconReplacement.replacement}".`
+        : `I could not find an icon matching "${directIconReplacement.target}".`;
+      onStep({ type: 'answer', content: answer });
+      return answer;
+    }
+
+    const answer = `I could not change the icon: ${result.error}`;
+    onStep({ type: 'answer', content: answer });
+    return answer;
+  }
+
   const directDropdownOption = parseDirectDropdownOption(userMessage);
   if (directDropdownOption) {
     onStep({

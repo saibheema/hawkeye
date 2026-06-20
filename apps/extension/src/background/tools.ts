@@ -292,6 +292,18 @@ export const TOOLS: LLMTool[] = [
       required: ['variable', 'value'],
     },
   },
+  {
+    name: 'replace_icon',
+    description: 'Replace an icon-only button/control by accessible label, icon glyph, SVG title, or common icon name. Use for requests like "change + icon to X icon" or "change search icon to close".',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Icon to find, e.g. "+", "plus", "add", "search", "menu", "close".' },
+        replacement: { type: 'string', description: 'Replacement icon text/glyph/label, e.g. "X", "×", "Close", "Search".' },
+      },
+      required: ['target', 'replacement'],
+    },
+  },
 ];
 
 // ─── Executor ─────────────────────────────────────────────────────────────────
@@ -1456,6 +1468,154 @@ export async function executeTool(
         if (affected === 0) return { ok: false, error: `No elements match selector: ${a.selector}` };
         await persistDomMutation(tabId, 'set_css_var', a as unknown as Record<string, unknown>, res);
         return { ok: true, data: { set: args.variable, to: args.value, affected } };
+      }
+
+      case 'replace_icon': {
+        type ReplaceIconArgs = { target: string; replacement: string };
+        const a = args as unknown as ReplaceIconArgs;
+        const res = await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          world: 'MAIN',
+          func: (o: ReplaceIconArgs) => {
+            const target = normalizeIconText(o.target);
+            const replacement = cleanReplacement(o.replacement);
+            if (!target || !replacement) return { ok: true as const, count: 0, frameUrl: location.href };
+            let count = 0;
+
+            const candidates = Array.from(document.querySelectorAll([
+              'button',
+              'a',
+              '[role="button"]',
+              '[role="link"]',
+              '[aria-label]',
+              '[title]',
+              '[data-icon]',
+              '[jsaction]',
+              'svg',
+              'i',
+              'span',
+              'div',
+            ].join(',')));
+
+            for (const candidate of candidates) {
+              const control = iconControl(candidate);
+              if (!control || control.dataset.hawkeyeIconReplaced === replacement) continue;
+              const labels = iconLabels(candidate, control).map(normalizeIconText).filter(Boolean);
+              if (!labels.some((label) => iconMatches(label, target))) continue;
+              replaceControlIcon(control, replacement);
+              count++;
+            }
+
+            return { ok: true as const, count, frameUrl: location.href };
+
+            function iconControl(el: Element): HTMLElement | null {
+              if (el instanceof SVGElement) {
+                return el.closest('button,a,[role="button"],[role="link"],[aria-label],[title],[jsaction]') as HTMLElement | null ?? el as unknown as HTMLElement;
+              }
+              if (!(el instanceof HTMLElement)) return null;
+              return el.closest('button,a,[role="button"],[role="link"]') as HTMLElement | null ?? el;
+            }
+
+            function iconLabels(source: Element, control: HTMLElement): string[] {
+              const svgTitles = Array.from(control.querySelectorAll('svg title')).map((title) => title.textContent ?? '');
+              const useHrefs = Array.from(control.querySelectorAll('use')).map((use) => use.getAttribute('href') ?? use.getAttribute('xlink:href') ?? '');
+              return [
+                source instanceof HTMLElement ? source.innerText : '',
+                source.textContent,
+                control.innerText,
+                control.textContent,
+                source.getAttribute('aria-label'),
+                source.getAttribute('title'),
+                source.getAttribute('data-icon'),
+                source.getAttribute('data-testid'),
+                source.getAttribute('class'),
+                source.id,
+                control.getAttribute('aria-label'),
+                control.getAttribute('title'),
+                control.getAttribute('data-icon'),
+                control.getAttribute('data-testid'),
+                control.getAttribute('class'),
+                control.id,
+                ...svgTitles,
+                ...useHrefs,
+              ].filter((value): value is string => !!value);
+            }
+
+            function replaceControlIcon(control: HTMLElement, value: string) {
+              const display = displayIcon(value);
+              control.dataset.hawkeyeIconReplaced = value;
+              control.setAttribute('aria-label', value);
+              control.setAttribute('title', value);
+              if (control instanceof HTMLInputElement) {
+                control.value = display;
+                return;
+              }
+              control.replaceChildren();
+              const span = document.createElement('span');
+              span.dataset.hawkeyeIconReplacement = 'true';
+              span.textContent = display;
+              span.style.display = 'inline-flex';
+              span.style.alignItems = 'center';
+              span.style.justifyContent = 'center';
+              span.style.font = 'inherit';
+              span.style.lineHeight = '1';
+              control.appendChild(span);
+            }
+
+            function iconMatches(label: string, wanted: string): boolean {
+              if (!label || !wanted) return false;
+              if (label === wanted || label.includes(wanted)) return true;
+              const wantedAliases = aliasesFor(wanted);
+              const labelAliases = aliasesFor(label);
+              return wantedAliases.some((alias) => label === alias || label.includes(alias) || labelAliases.includes(alias));
+            }
+
+            function aliasesFor(value: string): string[] {
+              const normalized = normalizeIconText(value);
+              const aliases: Record<string, string[]> = {
+                '+': ['+', 'plus', 'add', 'new', 'create'],
+                plus: ['+', 'plus', 'add', 'new', 'create'],
+                add: ['+', 'plus', 'add', 'new', 'create'],
+                x: ['x', '×', 'close', 'clear', 'remove', 'dismiss'],
+                '×': ['x', '×', 'close', 'clear', 'remove', 'dismiss'],
+                close: ['x', '×', 'close', 'clear', 'remove', 'dismiss'],
+                search: ['search', 'magnify', 'magnifying glass'],
+                menu: ['menu', 'hamburger'],
+              };
+              return Array.from(new Set([normalized, ...(aliases[normalized] ?? [])].filter(Boolean)));
+            }
+
+            function displayIcon(value: string): string {
+              const cleaned = cleanReplacement(value);
+              if (normalizeIconText(cleaned) === 'close') return '×';
+              return cleaned;
+            }
+
+            function cleanReplacement(value: string): string {
+              return String(value ?? '')
+                .replace(/\bicon\b/gi, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            }
+
+            function normalizeIconText(value: string): string {
+              return String(value ?? '')
+                .replace(/[_-]+/g, ' ')
+                .replace(/\b(?:icon|button|btn|symbol)\b/gi, '')
+                .replace(/[#"'.]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+            }
+          },
+          args: [a],
+        });
+        const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
+        if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
+        const affected = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
+        if (affected === 0) return { ok: false, error: `No icon matched: ${a.target}` };
+        await persistDomMutation(tabId, 'replace_icon', a as unknown as Record<string, unknown>, res);
+        return { ok: true, data: { affected } };
       }
 
       default:
