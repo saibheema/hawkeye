@@ -7,7 +7,7 @@ import type { ExtensionMessage, AgentState } from '@hawkeye/types';
 import { startNetworkWatcher } from './network-watcher.js';
 import { runAgent } from './agent.js';
 import {
-  startRecording, stopRecording, isRecording, recordStep, getRecordingSteps, getRecordingState,
+  startRecording, stopRecording, isRecording, recordStep, getRecordingSteps, getRecordingState, ensureRecordingState,
   saveFlow, listFlows, deleteFlow,
 } from './flow-recorder.js';
 import { replayFlow } from './flow-runner.js';
@@ -191,7 +191,7 @@ async function handleMessage(
 
       case 'FLOW_RECORD_STATUS': {
         if (!tabId) { sendResponse({ ok: false, recording: false }); break; }
-        const state = getRecordingState(tabId);
+        const state = await ensureRecordingState(tabId);
         sendResponse({ ok: true, recording: !!state, startUrl: state?.startUrl, startTitle: state?.startTitle });
         break;
       }
@@ -203,6 +203,7 @@ async function handleMessage(
           args: Record<string, unknown>;
           meta?: Record<string, unknown>;
         };
+        await ensureRecordingState(tabId);
         if (isRecording(tabId)) {
           const frameId = sender.frameId;
           const framedArgs = frameId && frameId !== 0
@@ -223,6 +224,7 @@ async function handleMessage(
         const { steps } = message.payload as {
           steps: Array<{ tool: string; args: Record<string, unknown>; meta?: Record<string, unknown> }>;
         };
+        await ensureRecordingState(tabId);
         const frameId = sender.frameId;
         for (const step of steps) {
           const framedArgs = frameId && frameId !== 0

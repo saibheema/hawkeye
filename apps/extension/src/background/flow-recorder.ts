@@ -58,14 +58,17 @@ export interface RecordingState {
 
 // In-memory recording state (per tab)
 const recording = new Map<number, RecordingState>();
+const RECORDING_STORAGE_KEY = 'hawkeye_active_recordings';
 
 export function startRecording(tabId: number, meta: { startUrl?: string; startTitle?: string } = {}): void {
   recording.set(tabId, { steps: [], ...meta });
+  void persistRecording(tabId);
 }
 
 export function stopRecording(tabId: number): RecordingState {
   const state = recording.get(tabId) ?? { steps: [] };
   recording.delete(tabId);
+  void clearPersistedRecording(tabId);
   return state;
 }
 
@@ -90,10 +93,12 @@ export function recordStep(
     && last.args.frameId === args.frameId
   ) {
     steps[steps.length - 1] = { tool, args, meta };
+    void persistRecording(tabId);
     return;
   }
   if (steps.length >= MAX_FLOW_STEPS) return;
   steps.push({ tool, args, meta });
+  void persistRecording(tabId);
 }
 
 export function getRecordingSteps(tabId: number): FlowStep[] {
@@ -102,6 +107,48 @@ export function getRecordingSteps(tabId: number): FlowStep[] {
 
 export function getRecordingState(tabId: number): RecordingState | null {
   return recording.get(tabId) ?? null;
+}
+
+export async function ensureRecordingState(tabId: number): Promise<RecordingState | null> {
+  const current = recording.get(tabId);
+  if (current) return current;
+  try {
+    const stored = await chrome.storage.local.get(RECORDING_STORAGE_KEY);
+    const all = (stored[RECORDING_STORAGE_KEY] ?? {}) as Record<string, RecordingState>;
+    const restored = all[String(tabId)] ?? null;
+    if (restored) recording.set(tabId, restored);
+    return restored;
+  } catch {
+    return null;
+  }
+}
+
+async function persistRecording(tabId: number): Promise<void> {
+  const state = recording.get(tabId);
+  if (!state) return;
+  try {
+    const stored = await chrome.storage.local.get(RECORDING_STORAGE_KEY);
+    const all = (stored[RECORDING_STORAGE_KEY] ?? {}) as Record<string, RecordingState>;
+    await chrome.storage.local.set({
+      [RECORDING_STORAGE_KEY]: {
+        ...all,
+        [String(tabId)]: state,
+      },
+    });
+  } catch {
+    // Recording should continue in memory even if persistence is unavailable.
+  }
+}
+
+async function clearPersistedRecording(tabId: number): Promise<void> {
+  try {
+    const stored = await chrome.storage.local.get(RECORDING_STORAGE_KEY);
+    const all = (stored[RECORDING_STORAGE_KEY] ?? {}) as Record<string, RecordingState>;
+    delete all[String(tabId)];
+    await chrome.storage.local.set({ [RECORDING_STORAGE_KEY]: all });
+  } catch {
+    // Ignore cleanup failures.
+  }
 }
 
 export function extractFlowFields(steps: FlowStep[]): FlowField[] {

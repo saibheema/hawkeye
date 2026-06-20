@@ -216,13 +216,26 @@ function recordScroll() {
 
 function closestActionable(target: EventTarget | null): Element | null {
   if (!(target instanceof Element)) return null;
-  return target.closest('button,a,[role="button"],input[type="button"],input[type="submit"],input[type="radio"],input[type="checkbox"]');
+  return target.closest([
+    'button',
+    'a[href]',
+    '[role="button"]',
+    '[role="link"]',
+    '[role="menuitem"]',
+    '[role="option"]',
+    'input[type="button"]',
+    'input[type="submit"]',
+    'input[type="radio"]',
+    'input[type="checkbox"]',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(','));
 }
 
 function shouldSkipClick(el: Element): boolean {
   if (el instanceof HTMLInputElement) {
     return !['button', 'submit', 'reset', 'radio', 'checkbox'].includes(el.type);
   }
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
   return false;
 }
 

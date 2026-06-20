@@ -394,6 +394,65 @@ test('records Enter from search textarea fields', async ({ context, extensionId 
   });
 });
 
+test('records clicks after search results navigation', async ({ context, extensionId }) => {
+  const html = (req: http.IncomingMessage) => {
+    if (req.url?.startsWith('/final')) {
+      return `<!doctype html><html><body><h1>Final Page</h1></body></html>`;
+    }
+    if (req.url?.startsWith('/search')) {
+      return `<!doctype html>
+        <html>
+          <body>
+            <h1>Results</h1>
+            <a id="resultLink" href="/final"><h3>Result link</h3></a>
+          </body>
+        </html>`;
+    }
+    return `<!doctype html>
+      <html>
+        <body>
+          <form id="searchForm" action="/search" role="search">
+            <label for="q">Search</label>
+            <textarea id="q" name="q" aria-label="Search" role="combobox"></textarea>
+          </form>
+        </body>
+      </html>`;
+  };
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+    await target.locator('#q').fill('after search click');
+    await target.locator('#q').press('Enter');
+    await expect(target.locator('#resultLink')).toBeVisible();
+    await target.locator('#resultLink').click();
+    await expect(target.locator('h1')).toHaveText('Final Page');
+
+    const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+    const steps = stopped.steps ?? [];
+    expect(steps.some((step: any) => step.tool === 'type_text' && step.args?.text === 'after search click')).toBe(true);
+    expect(steps.some((step: any) => step.tool === 'trigger_event' && step.args?.event === 'keydown' && step.args?.key === 'Enter')).toBe(true);
+    expect(steps.some((step: any) => step.tool === 'click' && step.meta?.label === 'Result link')).toBe(true);
+    expect(steps.length).toBeGreaterThanOrEqual(3);
+
+    const flow = { id: 'flow_results_click', name: 'Results click', domain: '127.0.0.1', startUrl: stopped.startUrl, createdAt: Date.now(), steps, stepCount: steps.length };
+    await target.goto(`${baseUrl}/final`);
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results).toHaveLength(1);
+    expect(results[0].ok).toBe(true);
+    await expect(target.locator('h1')).toHaveText('Final Page');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('caps recorded flows at 256 replayable steps', async ({ context, extensionId }) => {
   const html = `<!doctype html><html><body><h1>Step cap</h1></body></html>`;
 
