@@ -257,6 +257,50 @@ test('dashboard portal lists recorded flows and replay controls', async ({ conte
   await page.close();
 });
 
+test('records Enter key submissions as replayable steps', async ({ context, extensionId }) => {
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <form id="searchForm">
+          <label>Search <input id="q" name="q"></label>
+        </form>
+        <script>
+          window.__submits = [];
+          document.querySelector('#searchForm').addEventListener('submit', (event) => {
+            event.preventDefault();
+            window.__submits.push(new FormData(event.currentTarget).get('q'));
+          });
+        </script>
+      </body>
+    </html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+    await target.locator('#q').fill('am I recording anything?');
+    await target.locator('#q').press('Enter');
+    await target.waitForTimeout(500);
+
+    const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+    const steps = stopped.steps ?? [];
+    expect(steps.some((step: any) => step.tool === 'type_text' && step.args?.text === 'am I recording anything?')).toBe(true);
+    expect(steps.some((step: any) => step.tool === 'trigger_event' && step.args?.event === 'keydown' && step.args?.key === 'Enter')).toBe(true);
+    expect(steps.length).toBeGreaterThanOrEqual(2);
+
+    const submitted = await target.evaluate(() => (window as any).__submits);
+    expect(submitted).toEqual(['am I recording anything?']);
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('records manual form actions and replays same or random data', async ({ context, extensionId }) => {
   test.setTimeout(120_000);
   const html = `<!doctype html>

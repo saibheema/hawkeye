@@ -857,6 +857,10 @@ export async function executeTool(
                 evt = new Event(o.event, { bubbles: true, cancelable: true });
               }
               el.dispatchEvent(evt);
+              if (o.event === 'submit' && el instanceof HTMLFormElement && !evt.defaultPrevented) {
+                if (typeof el.requestSubmit === 'function') el.requestSubmit();
+                else el.submit();
+              }
               if (o.event === 'focus') el.focus?.();
               if (o.event === 'blur')  el.blur?.();
             }
