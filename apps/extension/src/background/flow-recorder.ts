@@ -182,6 +182,7 @@ function inferDataKindFromValue(value: string): string {
   if (/^\d{5}(-\d{4})?$/.test(value)) return 'zip';
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'date';
   if (/^\d{1,2}:\d{2}/.test(value)) return 'time';
+  if (/^\d+$/.test(value)) return 'number';
   if (/^[a-z]+ [a-z]+$/i.test(value)) return 'name';
   return 'text';
 }

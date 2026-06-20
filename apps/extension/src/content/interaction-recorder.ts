@@ -14,6 +14,8 @@ type DataKind =
   | 'date'
   | 'time'
   | 'zip'
+  | 'number'
+  | 'mileage'
   | 'notes'
   | 'text';
 
@@ -105,19 +107,27 @@ function recordClick(event: MouseEvent) {
 
 function recordInput(event: Event) {
   if (!recording || !event.isTrusted) return;
-  const step = inputStepFromElement(event.target);
-  if (step) {
-    rememberFieldStep(step);
-    sendStep(step.tool, step.args, step.meta);
-  }
+  recordFieldTarget(event.target);
 }
 
 function recordChange(event: Event) {
-  if (!recording || !event.isTrusted) return;
-  const step = inputStepFromElement(event.target);
+  if (!recording) return;
+  if (!event.isTrusted && !isRecordableSyntheticChange(event.target)) return;
+  recordFieldTarget(event.target);
+}
+
+function recordFieldTarget(target: EventTarget | null) {
+  const step = inputStepFromElement(target);
   if (!step) return;
+  if (isDuplicateFieldStep(step)) return;
   rememberFieldStep(step);
   sendStep(step.tool, step.args, step.meta);
+}
+
+function isRecordableSyntheticChange(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLSelectElement)) return false;
+  const rect = target.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0 && !target.disabled;
 }
 
 function inputStepFromElement(target: EventTarget | null): RecordedStep | null {
@@ -440,6 +450,8 @@ function inferDataKind(el: HTMLInputElement | HTMLTextAreaElement, label: string
   if (haystack.includes('date')) return 'date';
   if (haystack.includes('time')) return 'time';
   if (haystack.includes('zip') || haystack.includes('postal')) return 'zip';
+  if (haystack.includes('mileage') || haystack.includes('odometer')) return 'mileage';
+  if (haystack.includes('number') || (el instanceof HTMLInputElement && (el.type === 'number' || el.inputMode === 'numeric'))) return 'number';
   if (haystack.includes('note') || haystack.includes('comment') || el instanceof HTMLTextAreaElement) return 'notes';
   return 'text';
 }

@@ -27,6 +27,8 @@ export interface TestData {
   date: string;
   time: string;
   zip: string;
+  number: string;
+  mileage: string;
   notes: string;
   text: string;
   [key: string]: string;
@@ -54,6 +56,8 @@ export function generateTestData(runIndex: number): TestData {
     date:       dateStr,
     time:       `${h12}:${mins} ${ampm}`,
     zip:        String(randomInt(10000, 99999)),
+    number:     String(randomInt(1000, 99999)),
+    mileage:    String(randomInt(5000, 85000)),
     notes:      `Test run #${runIndex + 1} — automated by Hawkeye`,
     text:       `Hawkeye test ${runIndex + 1}-${tag}`,
   };
@@ -116,6 +120,7 @@ function inferKindFromValue(value: string): keyof TestData {
   if (/^\d{5}(-\d{4})?$/.test(value)) return 'zip';
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'date';
   if (/^\d{1,2}:\d{2}/.test(value)) return 'time';
+  if (/^\d+$/.test(value)) return 'number';
   if (/^[a-z]+ [a-z]+$/i.test(value)) return 'name';
   return 'text';
 }

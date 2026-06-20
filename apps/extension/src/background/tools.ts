@@ -547,9 +547,7 @@ export async function executeTool(
             async (o: Record<string, any>) => {
               const el = await waitForReplayElement(o);
               if (!el) return { ok: false, error: `Select not found in frame: ${o.selector}` };
-              el.value = String(o.value ?? '');
-              el.dispatchEvent(new Event('change', { bubbles: true }));
-              return { ok: true };
+              return await selectNativeOption(el, String(o.value ?? ''));
               function findReplayElement(payload: Record<string, any>): HTMLSelectElement | null {
                 const selectors = [payload.selector, ...(Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type === 'css').map((c: any) => c.selector || c.value) : [])].filter(Boolean);
                 for (const selector of selectors) {
@@ -574,6 +572,36 @@ export async function executeTool(
                 return parts.filter(Boolean).join(' ');
               }
               function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
+              function findOption(select: HTMLSelectElement, desiredValue: string): HTMLOptionElement | null {
+                const desired = normalize(desiredValue);
+                return Array.from(select.options).find((option) =>
+                  option.value === desiredValue
+                  || normalize(option.textContent ?? '') === desired
+                  || normalize(option.label) === desired
+                ) ?? null;
+              }
+              async function waitForOption(select: HTMLSelectElement, desiredValue: string) {
+                const deadline = Date.now() + 10000;
+                let option = findOption(select, desiredValue);
+                while (!option && Date.now() < deadline) {
+                  await new Promise((resolve) => setTimeout(resolve, 150));
+                  option = findOption(select, desiredValue);
+                }
+                return option;
+              }
+              async function selectNativeOption(select: HTMLSelectElement, desiredValue: string) {
+                const option = await waitForOption(select, desiredValue);
+                if (!option) return { ok: false, error: `Option not found in frame for ${o.selector}: ${desiredValue}` };
+                const value = option.value;
+                const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+                if (setter) setter.call(select, value);
+                else select.value = value;
+                option.selected = true;
+                select.dispatchEvent(new Event('input', { bubbles: true }));
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                if (select.value !== value) return { ok: false, error: `Select value did not stick in frame for ${o.selector}: expected ${value}, got ${select.value}` };
+                return { ok: true, value };
+              }
               async function waitForReplayElement(payload: Record<string, any>) {
                 const deadline = Date.now() + 5000;
                 let el = findReplayElement(payload);
@@ -591,9 +619,7 @@ export async function executeTool(
             async (o: Record<string, any>) => {
               const el = await waitForReplayElement(o);
               if (!el) return { ok: false, error: `Select not found in iframe: ${o.selector}` };
-              el.value = String(o.value ?? '');
-              el.dispatchEvent(new Event('change', { bubbles: true }));
-              return { ok: true };
+              return await selectNativeOption(el, String(o.value ?? ''));
               function findReplayElement(payload: Record<string, any>): HTMLSelectElement | null {
                 const selectors = [payload.selector, ...(Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type === 'css').map((c: any) => c.selector || c.value) : [])].filter(Boolean);
                 for (const selector of selectors) {
@@ -618,6 +644,36 @@ export async function executeTool(
                 return parts.filter(Boolean).join(' ');
               }
               function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
+              function findOption(select: HTMLSelectElement, desiredValue: string): HTMLOptionElement | null {
+                const desired = normalize(desiredValue);
+                return Array.from(select.options).find((option) =>
+                  option.value === desiredValue
+                  || normalize(option.textContent ?? '') === desired
+                  || normalize(option.label) === desired
+                ) ?? null;
+              }
+              async function waitForOption(select: HTMLSelectElement, desiredValue: string) {
+                const deadline = Date.now() + 10000;
+                let option = findOption(select, desiredValue);
+                while (!option && Date.now() < deadline) {
+                  await new Promise((resolve) => setTimeout(resolve, 150));
+                  option = findOption(select, desiredValue);
+                }
+                return option;
+              }
+              async function selectNativeOption(select: HTMLSelectElement, desiredValue: string) {
+                const option = await waitForOption(select, desiredValue);
+                if (!option) return { ok: false, error: `Option not found in iframe for ${o.selector}: ${desiredValue}` };
+                const value = option.value;
+                const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+                if (setter) setter.call(select, value);
+                else select.value = value;
+                option.selected = true;
+                select.dispatchEvent(new Event('input', { bubbles: true }));
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                if (select.value !== value) return { ok: false, error: `Select value did not stick in iframe for ${o.selector}: expected ${value}, got ${select.value}` };
+                return { ok: true, value };
+              }
               async function waitForReplayElement(payload: Record<string, any>) {
                 const deadline = Date.now() + 5000;
                 let el = findReplayElement(payload);

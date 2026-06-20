@@ -118,9 +118,10 @@ async function handleContentMessage(
       const { value } = p as { value: string };
       const el = await waitForElement(p, 'select') as HTMLSelectElement | null;
       if (el) {
-        el.value = value;
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        sendResponse({ ok: true, selector: selectorForResponse(el, p?.selector) });
+        const selected = await selectNativeOption(el, value);
+        sendResponse(selected.ok
+          ? { ok: true, selector: selectorForResponse(el, p?.selector), value: selected.value }
+          : selected);
       } else {
         sendResponse({ ok: false, error: `Select not found: ${p?.selector}` });
       }
@@ -155,6 +156,50 @@ async function handleContentMessage(
       // Not for us — let it fall through
       sendResponse({ ok: false, error: 'unknown message type' });
   }
+}
+
+async function selectNativeOption(el: HTMLSelectElement, desiredValue: string): Promise<{ ok: true; value: string } | { ok: false; error: string }> {
+  const desired = String(desiredValue ?? '');
+  const option = await waitForOption(el, desired);
+  if (!option) {
+    return { ok: false, error: `Option not found for select ${selectorForResponse(el, undefined)}: ${desired}` };
+  }
+
+  const value = option.value;
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+  if (setter) setter.call(el, value);
+  else el.value = value;
+  option.selected = true;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+
+  if (el.value !== value) {
+    return { ok: false, error: `Select value did not stick for ${selectorForResponse(el, undefined)}: expected ${value}, got ${el.value}` };
+  }
+  return { ok: true, value };
+}
+
+async function waitForOption(el: HTMLSelectElement, desiredValue: string): Promise<HTMLOptionElement | null> {
+  const deadline = Date.now() + 10_000;
+  let option = findOption(el, desiredValue);
+  while (!option && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    option = findOption(el, desiredValue);
+  }
+  return option;
+}
+
+function findOption(el: HTMLSelectElement, desiredValue: string): HTMLOptionElement | null {
+  const desired = normalizeValue(desiredValue);
+  return Array.from(el.options).find((option) =>
+    option.value === desiredValue
+    || normalizeValue(option.textContent ?? '') === desired
+    || normalizeValue(option.label) === desired
+  ) ?? null;
+}
+
+function normalizeValue(value: string): string {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 async function waitForElement(payload: any, kind: 'click' | 'type' | 'select', timeoutMs = 5_000): Promise<Element | null> {
