@@ -1030,9 +1030,14 @@ test('agent direct icon command updates icon-only controls', async ({ context, e
   const html = `<!doctype html>
     <html>
       <body>
+        <main id="content">
+          <h1>Google-like page stays intact</h1>
+          <p>This large content area includes a + sign but must not be replaced.</p>
+        </main>
         <button id="addButton" aria-label="Add" title="Add">
           <svg width="20" height="20" aria-hidden="true"><title>plus</title><path d="M10 3v14M3 10h14"></path></svg>
         </button>
+        <button id="newCustomer">New Customer</button>
       </body>
     </html>`;
 
@@ -1059,6 +1064,9 @@ test('agent direct icon command updates icon-only controls', async ({ context, e
 
     await expect(target.locator('#addButton')).toHaveText('X');
     await expect(target.locator('#addButton')).toHaveAttribute('aria-label', 'X');
+    await expect(target.locator('#content')).toContainText('Google-like page stays intact');
+    await expect(target.locator('#content')).toContainText('must not be replaced');
+    await expect(target.locator('#newCustomer')).toHaveText('New Customer');
 
     await extensionPage.close();
     await target.close();

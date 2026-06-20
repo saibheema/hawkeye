@@ -1487,6 +1487,8 @@ export async function executeTool(
               'a',
               '[role="button"]',
               '[role="link"]',
+              'input[type="button"]',
+              'input[type="submit"]',
               '[aria-label]',
               '[title]',
               '[data-icon]',
@@ -1494,12 +1496,12 @@ export async function executeTool(
               'svg',
               'i',
               'span',
-              'div',
             ].join(',')));
 
             for (const candidate of candidates) {
               const control = iconControl(candidate);
               if (!control || control.dataset.hawkeyeIconReplaced === replacement) continue;
+              if (!isSafeIconTarget(control, candidate)) continue;
               const labels = iconLabels(candidate, control).map(normalizeIconText).filter(Boolean);
               if (!labels.some((label) => iconMatches(label, target))) continue;
               replaceControlIcon(control, replacement);
@@ -1513,7 +1515,37 @@ export async function executeTool(
                 return el.closest('button,a,[role="button"],[role="link"],[aria-label],[title],[jsaction]') as HTMLElement | null ?? el as unknown as HTMLElement;
               }
               if (!(el instanceof HTMLElement)) return null;
-              return el.closest('button,a,[role="button"],[role="link"]') as HTMLElement | null ?? el;
+              return el.closest('button,a,[role="button"],[role="link"],input[type="button"],input[type="submit"]') as HTMLElement | null ?? el;
+            }
+
+            function isSafeIconTarget(control: HTMLElement, source: Element): boolean {
+              const rect = control.getBoundingClientRect();
+              if (rect.width <= 0 || rect.height <= 0) return false;
+              const tag = control.tagName.toLowerCase();
+              const role = control.getAttribute('role')?.toLowerCase() ?? '';
+              const isExplicitControl = ['button', 'a', 'input'].includes(tag) || ['button', 'link'].includes(role);
+              const isIconSource = source instanceof SVGElement || ['svg', 'i'].includes(source.tagName.toLowerCase());
+              const text = control instanceof HTMLInputElement
+                ? control.value.trim()
+                : (control.innerText || control.textContent || '').replace(/\s+/g, ' ').trim();
+              const childCount = control.querySelectorAll('*').length;
+              const hasIconChild = !!control.querySelector('svg,i,[data-icon],[aria-hidden="true"]');
+
+              if (isExplicitControl) {
+                if (control instanceof HTMLInputElement && text.length > 3) return false;
+                if (!hasIconChild && text.length > 24) return false;
+                return rect.width <= 160 && rect.height <= 120 && text.length <= 80 && childCount <= 12;
+              }
+              if (isIconSource) {
+                return rect.width <= 120 && rect.height <= 120 && text.length <= 40 && childCount <= 8;
+              }
+              const style = window.getComputedStyle(control);
+              const hasIconSignal = control.hasAttribute('aria-label')
+                || control.hasAttribute('title')
+                || control.hasAttribute('data-icon')
+                || control.hasAttribute('jsaction')
+                || style.cursor === 'pointer';
+              return hasIconSignal && rect.width <= 96 && rect.height <= 96 && text.length <= 24 && childCount <= 6;
             }
 
             function iconLabels(source: Element, control: HTMLElement): string[] {
@@ -1564,18 +1596,28 @@ export async function executeTool(
 
             function iconMatches(label: string, wanted: string): boolean {
               if (!label || !wanted) return false;
-              if (label === wanted || label.includes(wanted)) return true;
               const wantedAliases = aliasesFor(wanted);
               const labelAliases = aliasesFor(label);
-              return wantedAliases.some((alias) => label === alias || label.includes(alias) || labelAliases.includes(alias));
+              if (wantedAliases.some((alias) => aliasMatches(label, alias) || labelAliases.includes(alias))) return true;
+              if (wantedAliases.includes('+') && /\+/.test(label)) return true;
+              return false;
+            }
+
+            function aliasMatches(label: string, alias: string): boolean {
+              if (label === alias) return true;
+              if (alias === '+') return /\+/.test(label);
+              if (alias.length < 3) return false;
+              return ` ${label} `.includes(` ${alias} `);
             }
 
             function aliasesFor(value: string): string[] {
               const normalized = normalizeIconText(value);
               const aliases: Record<string, string[]> = {
-                '+': ['+', 'plus', 'add', 'new', 'create'],
-                plus: ['+', 'plus', 'add', 'new', 'create'],
-                add: ['+', 'plus', 'add', 'new', 'create'],
+                '+': ['+', 'plus', 'add'],
+                plus: ['+', 'plus', 'add'],
+                add: ['+', 'plus', 'add'],
+                new: ['new', 'create', 'add'],
+                create: ['create', 'new', 'add'],
                 x: ['x', '×', 'close', 'clear', 'remove', 'dismiss'],
                 '×': ['x', '×', 'close', 'clear', 'remove', 'dismiss'],
                 close: ['x', '×', 'close', 'clear', 'remove', 'dismiss'],
