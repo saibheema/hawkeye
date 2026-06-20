@@ -120,6 +120,7 @@ Iframe handling:
 function parseDirectTextReplacement(message: string): { find: string; replace: string } | null {
   if (/\b(colou?r|background|font|style|border|size)\b/i.test(message)) return null;
   if (/\b(placeholder|text\s*box|textbox|input|field)\b/i.test(message)) return null;
+  if (/\bicon\b/i.test(message)) return null;
   if (/\b(same|it|that|this|previous|last|iframe|frame|footer|header)\b/i.test(message)) return null;
 
   const normalized = message
@@ -217,8 +218,8 @@ function parseDirectIconReplacement(message: string): { target: string; replacem
 
   if (!/\bicon\b/i.test(normalized)) return null;
   const match =
-    normalized.match(/^(?:change|replace|rename|set)\s+(.+?)\s+(?:icon\s+)?(?:to|with|as)\s+(.+?)$/i)
-    ?? normalized.match(/^(?:change|replace|rename|set)\s+(?:the\s+)?icon\s+(.+?)\s+(?:to|with|as)\s+(.+?)$/i);
+    normalized.match(/^(?:change|replace|rename|set|update|make|turn)\s+(.+?)\s+(?:icon\s+)?(?:to|with|as|into)\s+(.+?)$/i)
+    ?? normalized.match(/^(?:change|replace|rename|set|update|make|turn)\s+(?:the\s+)?icon\s+(.+?)\s+(?:to|with|as|into)\s+(.+?)$/i);
   if (!match) return null;
 
   const target = cleanIconText(match[1]);

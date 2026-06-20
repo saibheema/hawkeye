@@ -1049,7 +1049,7 @@ test('agent direct icon command updates icon-only controls', async ({ context, e
       type: 'AGENT_RUN',
       tabId,
       payload: {
-        task: 'change + icon to X icon',
+        task: 'update + icon to X icon',
         history: [],
         apiKey: 'not-needed-for-direct-icon',
         provider: 'gemini',
