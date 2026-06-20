@@ -109,6 +109,7 @@ Iframe handling:
 
 function parseDirectTextReplacement(message: string): { find: string; replace: string } | null {
   if (/\b(colou?r|background|font|style|border|size)\b/i.test(message)) return null;
+  if (/\b(placeholder|text\s*box|textbox|input|field)\b/i.test(message)) return null;
 
   const normalized = message
     .trim()
@@ -143,6 +144,32 @@ function parseDirectStyleChange(message: string): { text: string; color: string 
   if (!text || !color || text.length > 200 || color.length > 100) return null;
 
   return { text, color };
+}
+
+function parseDirectPlaceholderChange(message: string): { label: string; placeholder: string } | null {
+  const normalized = message
+    .trim()
+    .replace(/^[\s"'`]*(?:can you|please|pls)\s+/i, '')
+    .replace(/\s+please[?.!]?$/i, '');
+
+  const match =
+    normalized.match(/^(?:add|set|change|put|show)\s+(?:a\s+)?placeholder\s+(?:for|on|in|to)\s+(.+?)\s+(?:to|as|called|named|:|-)\s+(.+?)$/i)
+    ?? normalized.match(/^(?:set|change)\s+(.+?)\s+placeholder\s+(?:to|as|called|named|:|-)\s+(.+?)$/i);
+
+  if (!match) return null;
+
+  const label = cleanTargetText(match[1])
+    .replace(/\b(?:text\s*box|textbox|input|field|placeholder)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const placeholder = match[2]
+    .trim()
+    .replace(/^[-:\s]+/, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .trim();
+
+  if (!label || !placeholder || label.length > 200 || placeholder.length > 500) return null;
+  return { label, placeholder };
 }
 
 function looksLikeColor(value: string): boolean {
@@ -183,6 +210,37 @@ export async function runAgent(
   onStep: StepCallback,
   permissionGate: (action: string, args: Record<string, unknown>) => Promise<boolean>
 ): Promise<string> {
+  const directPlaceholderChange = parseDirectPlaceholderChange(userMessage);
+  if (directPlaceholderChange) {
+    onStep({
+      type: 'tool_call',
+      content: 'Calling set_placeholder_by_label',
+      tool: 'set_placeholder_by_label',
+      args: directPlaceholderChange,
+    });
+
+    const result = await executeTool('set_placeholder_by_label', directPlaceholderChange, tabId);
+    onStep({
+      type: 'tool_result',
+      content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+      tool: 'set_placeholder_by_label',
+      result: result.data ?? result.error,
+    });
+
+    if (!result.ok) {
+      const answer = `I could not set the placeholder: ${result.error}`;
+      onStep({ type: 'answer', content: answer });
+      return answer;
+    }
+
+    const affected = (result.data as { affected?: number } | undefined)?.affected ?? 0;
+    const answer = affected > 0
+      ? `Set the placeholder on ${affected} matching field${affected === 1 ? '' : 's'}.`
+      : `I could not find a field matching "${directPlaceholderChange.label}".`;
+    onStep({ type: 'answer', content: answer });
+    return answer;
+  }
+
   const directStyleChange = parseDirectStyleChange(userMessage);
   if (directStyleChange) {
     const args = {

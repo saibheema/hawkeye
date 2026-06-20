@@ -457,6 +457,43 @@ test('applies attribute changes inside and outside an iframe', async ({ context,
   });
 });
 
+test('agent direct placeholder command does not fall back to text replacement', async ({ context, extensionId }) => {
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <label for="phone">Enter your mobile phone number</label>
+        <input id="phone" name="phone" type="tel">
+      </body>
+    </html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    await target.locator('#phone').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    const response = await sendExtensionMessage(extensionPage, {
+      type: 'AGENT_RUN',
+      tabId,
+      payload: {
+        task: 'add a placeholder for phone number text box as - BLACK SHEEP',
+        history: [],
+        apiKey: 'not-needed-for-direct-placeholder',
+        provider: 'gemini',
+      },
+    });
+    expect(response?.started).toBe(true);
+
+    await expect(target.locator('#phone')).toHaveAttribute('placeholder', 'BLACK SHEEP');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('live Avis Ford scheduler records through contact screen without booking', async ({
   context,
   extensionId,
