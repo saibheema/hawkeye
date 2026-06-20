@@ -151,7 +151,7 @@ function recordKeyDown(event: KeyboardEvent) {
   if (!recording || !event.isTrusted || event.key !== 'Enter') return;
   const el = event.target;
   if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) return;
-  if (el instanceof HTMLTextAreaElement && !event.metaKey && !event.ctrlKey) return;
+  if (el instanceof HTMLTextAreaElement && !shouldRecordTextareaEnter(el, event)) return;
 
   const label = labelFor(el);
   const steps: RecordedStep[] = [];
@@ -234,6 +234,25 @@ function isSubmitControl(el: Element): boolean {
 
 function isModifiedClick(event: MouseEvent): boolean {
   return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
+}
+
+function shouldRecordTextareaEnter(el: HTMLTextAreaElement, event: KeyboardEvent): boolean {
+  if (event.metaKey || event.ctrlKey) return true;
+  const haystack = [
+    el.getAttribute('role'),
+    el.getAttribute('aria-label'),
+    el.getAttribute('placeholder'),
+    el.getAttribute('type'),
+    el.getAttribute('enterkeyhint'),
+    el.name,
+    el.id,
+    labelFor(el),
+    el.closest('form')?.getAttribute('role'),
+    el.closest('form')?.getAttribute('aria-label'),
+    el.closest('[role="search"]')?.getAttribute('role'),
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  return /\b(search|combobox|submit|go|find|query)\b/.test(haystack);
 }
 
 function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {

@@ -3,7 +3,7 @@
  */
 
 import { executeTool } from './tools.js';
-import type { Flow, FlowFieldStrategy, FlowStep } from './flow-recorder.js';
+import { MAX_FLOW_STEPS, type Flow, type FlowFieldStrategy, type FlowStep } from './flow-recorder.js';
 
 // ─── Test data generator ──────────────────────────────────────────────────────
 
@@ -162,6 +162,7 @@ export async function replayFlow(
   const results: RunResult[] = [];
   const effectiveStrategies = fieldStrategies ?? flow.replayDefaults?.fieldStrategies;
   const startUrl = startUrlForFlow(flow);
+  const stepsToRun = flow.steps.slice(0, MAX_FLOW_STEPS);
 
   for (let run = 0; run < repeatCount; run++) {
     const testData = generateTestData(run);
@@ -188,8 +189,8 @@ export async function replayFlow(
       }
     }
 
-    for (let si = 0; ok && si < flow.steps.length; si++) {
-      const step: FlowStep = flow.steps[si];
+    for (let si = 0; ok && si < stepsToRun.length; si++) {
+      const step: FlowStep = stepsToRun[si];
       const args = argsForStep(flow, step, si, testData, dataMode, effectiveStrategies);
 
       onProgress({ type: 'step', runIndex: run, total: repeatCount, stepIndex: si, stepTool: step.tool });

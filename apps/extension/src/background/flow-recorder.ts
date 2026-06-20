@@ -2,6 +2,8 @@
  * Flow Recorder — captures agent tool calls into replayable flows
  */
 
+export const MAX_FLOW_STEPS = 256;
+
 export interface FlowStep {
   tool: string;
   args: Record<string, unknown>;
@@ -90,6 +92,7 @@ export function recordStep(
     steps[steps.length - 1] = { tool, args, meta };
     return;
   }
+  if (steps.length >= MAX_FLOW_STEPS) return;
   steps.push({ tool, args, meta });
 }
 
@@ -150,7 +153,8 @@ export async function saveFlow(
   startUrl?: string,
   startTitle?: string
 ): Promise<Flow> {
-  const fields = extractFlowFields(steps);
+  const cappedSteps = steps.slice(0, MAX_FLOW_STEPS);
+  const fields = extractFlowFields(cappedSteps);
   const fieldStrategies = {
     ...Object.fromEntries(fields.map((field) => [field.id, field.strategy])),
     ...(replayDefaults?.fieldStrategies ?? {}),
@@ -164,8 +168,8 @@ export async function saveFlow(
     createdAt: Date.now(),
     updatedAt: Date.now(),
     version: 1,
-    steps,
-    stepCount: steps.length,
+    steps: cappedSteps,
+    stepCount: cappedSteps.length,
     fields: fields.map((field) => ({
       ...field,
       strategy: fieldStrategies[field.id] ?? replayDefaults?.dataMode ?? 'same',

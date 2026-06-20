@@ -1090,10 +1090,10 @@ export async function executeTool(
             el.dispatchEvent(evt);
             const isEnterSubmit = o.event === 'keydown'
               && o.key === 'Enter'
-              && (el instanceof HTMLInputElement || el instanceof HTMLSelectElement)
-              && !!el.form;
+              && (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement)
+              && !!(el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).form;
             if ((o.event === 'submit' && el instanceof HTMLFormElement && !evt.defaultPrevented) || (isEnterSubmit && !evt.defaultPrevented)) {
-              const form = el instanceof HTMLFormElement ? el : (el as HTMLInputElement | HTMLSelectElement).form;
+              const form = el instanceof HTMLFormElement ? el : (el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).form;
               if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
               else form?.submit();
             }
