@@ -82,6 +82,9 @@ function applyMutation(mutation: PersistedDomMutation) {
     case 'replace_selected_icon':
       applyReplaceSelectedIcon(mutation.args);
       break;
+    case 'set_background_image':
+      applyBackgroundImage(mutation.args);
+      break;
   }
 }
 
@@ -326,19 +329,20 @@ function applyReplaceSelectedIcon(args: Record<string, unknown>) {
   const selector = String(args.selector ?? '');
   const replacement = cleanIconReplacement(String(args.replacement ?? ''));
   if (!selector || !replacement) return;
+  const replacementSvg = sanitizeSvg(String(args.svg ?? ''), 25_000);
   const targets = Array.from(document.querySelectorAll(selector));
   for (const target of targets) {
     if (target instanceof SVGElement) {
       const svg = target.tagName.toLowerCase() === 'svg' ? target : target.ownerSVGElement;
       if (!svg) continue;
-      renderSvgIcon(svg, replacement);
+      renderSvgIcon(svg, replacement, replacementSvg);
       labelIconControl(svg, replacement);
       continue;
     }
     if (!(target instanceof HTMLElement)) continue;
     const svg = target.querySelector('svg');
     if (svg instanceof SVGElement) {
-      renderSvgIcon(svg, replacement);
+      renderSvgIcon(svg, replacement, replacementSvg);
       labelIconControl(target, replacement);
       continue;
     }
@@ -355,20 +359,33 @@ function labelIconControl(el: Element, value: string) {
   labelTarget.setAttribute('title', value);
 }
 
-function renderSvgIcon(svg: SVGElement, value: string) {
+function renderSvgIcon(svg: SVGElement, value: string, generatedSvg: SVGElement | null = null) {
   const display = displayIcon(value);
   const normalized = normalizeIconText(value);
+  const originalWidth = svg.getAttribute('width');
+  const originalHeight = svg.getAttribute('height');
+  const originalStyleWidth = svg.style.width;
+  const originalStyleHeight = svg.style.height;
   svg.replaceChildren();
   svg.dataset.hawkeyeIconReplacement = value;
-  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('viewBox', generatedSvg?.getAttribute('viewBox') || '0 0 24 24');
   svg.setAttribute('aria-label', value);
   svg.setAttribute('role', 'img');
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-  if (!svg.getAttribute('width') && !svg.style.width) svg.setAttribute('width', '24');
-  if (!svg.getAttribute('height') && !svg.style.height) svg.setAttribute('height', '24');
+  if (originalWidth) svg.setAttribute('width', originalWidth);
+  else if (!originalStyleWidth) svg.setAttribute('width', '24');
+  if (originalHeight) svg.setAttribute('height', originalHeight);
+  else if (!originalStyleHeight) svg.setAttribute('height', '24');
   svg.style.overflow = 'hidden';
   svg.style.display = svg.style.display || 'inline-block';
   svg.style.verticalAlign = svg.style.verticalAlign || 'middle';
+
+  if (generatedSvg) {
+    for (const child of Array.from(generatedSvg.childNodes)) {
+      svg.appendChild(document.importNode(child, true));
+    }
+    return;
+  }
 
   if (['x', '×', 'close', 'remove', 'dismiss', 'clear'].includes(normalized)) {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -392,6 +409,60 @@ function renderSvgIcon(svg: SVGElement, value: string) {
   text.setAttribute('font-weight', '700');
   text.textContent = display;
   svg.appendChild(text);
+}
+
+function applyBackgroundImage(args: Record<string, unknown>) {
+  const selector = String(args.selector ?? '');
+  if (!selector) return;
+  const image = cssBackgroundImageValue(String(args.svg ?? ''), String(args.image ?? ''));
+  if (!image) return;
+  const targets = Array.from(document.querySelectorAll(selector)) as HTMLElement[];
+  for (const el of targets) {
+    el.style.backgroundImage = image;
+    el.style.backgroundSize = String(args.size || 'cover');
+    el.style.backgroundPosition = String(args.position || 'center');
+    el.style.backgroundRepeat = String(args.repeat || 'no-repeat');
+  }
+}
+
+function cssBackgroundImageValue(svg: string, image: string): string {
+  const safeSvg = sanitizeSvg(svg, 200_000);
+  if (safeSvg) return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(safeSvg))}")`;
+  const raw = image.trim();
+  if (!raw) return '';
+  if (/^url\(/i.test(raw) || /^data:image\//i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('/') || raw.startsWith('./') || raw.startsWith('../')) {
+    return `url("${raw.replace(/"/g, '%22')}")`;
+  }
+  return '';
+}
+
+function sanitizeSvg(value: string, maxLength: number): SVGElement | null {
+  if (!value || value.length > maxLength) return null;
+  const doc = new DOMParser().parseFromString(value, 'image/svg+xml');
+  const parsed = doc.documentElement;
+  if (!parsed || parsed.tagName.toLowerCase() !== 'svg' || parsed.querySelector('parsererror')) return null;
+  parsed.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  const blocked = new Set(['script', 'foreignobject', 'iframe', 'object', 'embed', 'audio', 'video', 'canvas']);
+  for (const el of Array.from(parsed.querySelectorAll('*'))) {
+    if (blocked.has(el.tagName.toLowerCase())) {
+      el.remove();
+      continue;
+    }
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase();
+      const val = attr.value.trim().toLowerCase();
+      if (name.startsWith('on') || val.startsWith('javascript:') || name === 'href' || name === 'xlink:href') {
+        el.removeAttribute(attr.name);
+      }
+    }
+  }
+  for (const attr of Array.from(parsed.attributes)) {
+    const name = attr.name.toLowerCase();
+    const val = attr.value.trim().toLowerCase();
+    if (name.startsWith('on') || val.startsWith('javascript:')) parsed.removeAttribute(attr.name);
+  }
+  return parsed as unknown as SVGElement;
 }
 
 function iconMatches(label: string, wanted: string): boolean {

@@ -40,6 +40,7 @@ const PAGE_MUTATION_TOOLS = new Set([
   'set_css_var',
   'replace_icon',
   'replace_selected_icon',
+  'set_background_image',
 ]);
 const SYSTEM_PROMPT = `You are Hawkeye, an expert browser automation AI.
 You have access to tools to interact with the current web page.
@@ -72,6 +73,7 @@ Tool selection — pick the right one immediately:
 - Re-theme with CSS variables → set_css_var
 - Change icon-only controls by name ("change + icon to X", "replace search icon with close") → replace_icon
 - Change a picked/selected SVG or icon element to another icon → replace_selected_icon
+- Add/replace a background image on a selected element or selector → set_background_image
 - Remove elements → dom_op (op: remove)
 - Change attributes (href, placeholder, src) → dom_op (op: set_attr)
 - Add new HTML nodes → insert_html
@@ -97,6 +99,10 @@ Visual / UI changes — choose the right tool:
   Example: replace_icon({ target: "search", replacement: "close" })
 - **replace_selected_icon**: Replace the icon inside an exact known selector while preserving the existing SVG/control size.
   Example: replace_selected_icon({ selector: "button[aria-label='Add files and tools'] svg", replacement: "X" })
+  For non-standard icons, generate a simple safe inline SVG string yourself and pass it as svg.
+  Example: replace_selected_icon({ selector: "#weatherIcon", replacement: "sun", svg: "<svg viewBox='0 0 24 24'><circle cx='12' cy='12' r='4' fill='currentColor'/></svg>" })
+- **set_background_image**: Apply a generated visual background to a selector. For requested illustrations/patterns/background images, generate a compact safe SVG yourself and pass it as svg. Use image for an existing URL/data URI.
+  Example: set_background_image({ selector: "body", svg: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800'>...</svg>", size: "cover", position: "center" })
 - **dom_op**: Change text/HTML content, attributes, remove elements, or toggle classes.
   Example: dom_op({ op: "set_text", selector: "h1", value: "Welcome back!" })
   Example: dom_op({ op: "remove", selector: ".cookie-popup" })
