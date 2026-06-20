@@ -126,7 +126,12 @@ async function handleMessage(
       // ---------- Agent Run ----------
       case 'AGENT_RUN': {
         if (!tabId) { sendResponse({ error: 'no tab' }); break; }
-        const { task, apiKey, provider } = message.payload as { task: string; apiKey: string; provider: string };
+        const { task, history, apiKey, provider } = message.payload as {
+          task: string;
+          history?: Array<{ role: 'user' | 'agent'; text: string }>;
+          apiKey: string;
+          provider: string;
+        };
         const { token } = await chrome.storage.local.get('token');
 
         // Mark agent as running
@@ -138,6 +143,7 @@ async function handleMessage(
           task,
           tabId,
           { apiKey, provider },
+          history ?? [],
           (step) => {
             // Broadcast step to side panel
             chrome.runtime.sendMessage({ type: 'AGENT_STEP', payload: step }).catch(() => {});

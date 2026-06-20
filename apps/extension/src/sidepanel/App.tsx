@@ -203,6 +203,7 @@ function ChatPanel() {
     }
     if (key !== apiKey) setApiKey(key);
     const task = input.trim();
+    const history = messages.slice(-12).map((m) => ({ role: m.role, text: m.text }));
     setInput('');
     setRunning(true);
     setStatusLine('Reading page…');
@@ -214,7 +215,7 @@ function ChatPanel() {
       setMessages(m => [...m, { role: 'agent', text: '❌ No active tab found.', isError: true }]);
       return;
     }
-    chrome.runtime.sendMessage({ type: 'AGENT_RUN', tabId: tab.id, payload: { task, apiKey: key, provider: 'gemini' } });
+    chrome.runtime.sendMessage({ type: 'AGENT_RUN', tabId: tab.id, payload: { task, history, apiKey: key, provider: 'gemini' } });
   };
 
   return (

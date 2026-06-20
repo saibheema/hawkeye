@@ -151,6 +151,27 @@ export const TOOLS: LLMTool[] = [
     },
   },
   {
+    name: 'style_by_text',
+    description: 'Find visible elements by their text and apply inline styles. Works across the page and iframes. Use for requests like "change Welcome color to red" or "make New Customer button blue" when the user gives visible text instead of a selector.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Visible text to find, e.g. "Welcome" or "New Customer".' },
+        elementKind: {
+          type: 'string',
+          enum: ['any', 'button'],
+          description: 'Use button when the user specifically mentions a button; otherwise use any.',
+        },
+        styles: {
+          type: 'object',
+          description: 'CSS styles to apply, using camelCase or kebab-case keys. Example: {"color":"red"} or {"backgroundColor":"blue","color":"#fff"}.',
+          additionalProperties: { type: 'string' },
+        },
+      },
+      required: ['text', 'styles'],
+    },
+  },
+  {
     name: 'insert_html',
     description: 'Insert new HTML content relative to a target element. Use to add banners, badges, tooltips, buttons, or any new DOM nodes without replacing existing content.',
     parameters: {
@@ -725,7 +746,7 @@ export async function executeTool(
       }
 
       case 'style_by_text': {
-        type StyleByTextArgs = { text: string; styles: Record<string, string> };
+        type StyleByTextArgs = { text: string; styles: Record<string, string>; elementKind?: 'any' | 'button' };
         const a = args as unknown as StyleByTextArgs;
         const res = await chrome.scripting.executeScript({
           target: { tabId, allFrames: true },
@@ -733,7 +754,15 @@ export async function executeTool(
           func: (o: StyleByTextArgs) => {
             const needle = o.text.trim().toLowerCase();
             if (!needle) return { ok: true as const, count: 0 };
-            const candidates = Array.from(document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"]')) as HTMLElement[];
+            const selector = o.elementKind === 'button'
+              ? 'button,a,[role="button"],input[type="button"],input[type="submit"]'
+              : 'h1,h2,h3,h4,h5,h6,p,span,label,button,a,[role="button"],input[type="button"],input[type="submit"],div';
+            const candidates = (Array.from(document.querySelectorAll(selector)) as HTMLElement[])
+              .filter((el) => {
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+              })
+              .sort((a, b) => (a.textContent?.trim().length ?? 0) - (b.textContent?.trim().length ?? 0));
             let count = 0;
             for (const el of candidates) {
               const label = [
@@ -744,11 +773,13 @@ export async function executeTool(
                 (el as HTMLInputElement).value,
               ].filter(Boolean).join(' ').trim().toLowerCase();
               if (!label.includes(needle)) continue;
+              if (o.elementKind !== 'button' && el.children.length > 0 && label !== needle) continue;
               for (const [property, value] of Object.entries(o.styles)) {
                 const prop = property.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
                 (el.style as any)[prop] = value;
               }
               count++;
+              if (o.elementKind !== 'button') break;
             }
             return { ok: true as const, count };
           },

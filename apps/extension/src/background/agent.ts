@@ -22,6 +22,7 @@ export interface AgentStep {
 }
 
 export type StepCallback = (step: AgentStep) => void;
+export type AgentHistoryMessage = { role: 'user' | 'agent'; text: string };
 
 // Actions requiring user confirmation
 const REQUIRES_PERMISSION = new Set(['navigate']);
@@ -32,6 +33,7 @@ const PAGE_MODIFICATION_TOOLS = new Set([
   'dom_op',
   'insert_css',
   'set_style',
+  'style_by_text',
   'insert_html',
   'set_css_var',
 ]);
@@ -40,11 +42,14 @@ const SYSTEM_PROMPT = `You are Hawkeye, an expert browser automation AI.
 You have access to tools to interact with the current web page.
 Your job is to complete the user's task precisely and efficiently.
 
-CRITICAL: Never ask the user for permission or confirmation. Never say "Would you like me to…". Never ask "Should I…". Just execute the task immediately using the best available tool. If you are uncertain which selector to use, read the page first, then act.
+Use the conversation history. Follow-up requests like "make that red", "change it back", or "use a different label" refer to previous page elements or changes when clear.
+
+If the request is clear, execute it immediately with the best tool. If the request is genuinely ambiguous and choosing wrong could change the wrong element, ask exactly one short clarifying question and do not call a tool yet.
 
 Rules:
-1. For text replacement tasks ("change X to Y", "rename", "translate"), call replace_text IMMEDIATELY — no need to read the page first.
-2. For click / fill / navigate tasks, read_page ONCE to find the right selector, then act. Do NOT call read_page more than twice.
+1. For exact visible text replacement tasks ("change X text to Y", "rename X to Y"), call replace_text immediately.
+2. For color/style changes by visible text ("change Welcome color to red", "make New Customer button blue"), prefer style_by_text.
+3. For click / fill / navigate tasks, read_page ONCE to find the right selector, then act. Do NOT call read_page more than twice.
 3. After reading, immediately execute the required tool(s). Do not pause or ask.
 4. Use CSS selectors to interact with elements.
 5. After each action, verify the result with get_property or query_element if needed.
@@ -54,6 +59,7 @@ Rules:
 
 Tool selection — pick the right one immediately:
 - Change / replace visible text → replace_text (NO read_page needed — finds by text content directly)
+- Change color/style of visible text, labels, headings, or buttons → style_by_text
 - Change text on a known selector → dom_op (op: set_text)
 - Change styles / colors / fonts → insert_css or set_style
 - Re-theme with CSS variables → set_css_var
@@ -68,6 +74,9 @@ Visual / UI changes — choose the right tool:
   Example: insert_css({ css: "body { background: lightblue !important; } h1 { color: navy; }" })
 - **set_style**: Set an inline style on specific element(s). Best for targeted per-element overrides.
   Example: set_style({ selector: "button.cta", property: "backgroundColor", value: "#e91e63" })
+- **style_by_text**: Find visible elements by their text and apply inline styles across the page and iframes.
+  Example: style_by_text({ text: "Welcome", styles: { color: "red" } })
+  Example: style_by_text({ text: "New Customer", elementKind: "button", styles: { backgroundColor: "blue", borderColor: "blue", color: "#fff" } })
 - **set_css_var**: Set a CSS custom property (design token) to re-theme sites that use variables.
   Example: set_css_var({ variable: "--primary-color", value: "#ff5722" })
 - **dom_op**: Change text/HTML content, attributes, remove elements, or toggle classes.
@@ -94,6 +103,8 @@ Iframe handling:
 - Example: click({ selector: 'button[name="Continue"]', iframe_selector: 'iframe[title="service reservation form"]' })`;
 
 function parseDirectTextReplacement(message: string): { find: string; replace: string } | null {
+  if (/\b(colou?r|background|font|style|border|size)\b/i.test(message)) return null;
+
   const normalized = message
     .trim()
     .replace(/^[\s"'`]*(?:can you|please|pls)\s+/i, '')
@@ -106,6 +117,7 @@ function parseDirectTextReplacement(message: string): { find: string; replace: s
 
   const find = cleanTargetText(match[1]);
   const replace = match[2].trim().replace(/^["'`]+|["'`]+$/g, '');
+  if (/\b(button|link|field|input)\b/i.test(match[1]) && looksLikeColor(replace)) return null;
   if (!find || !replace || find.length > 200 || replace.length > 500) return null;
 
   return { find, replace };
@@ -119,12 +131,17 @@ function parseDirectStyleChange(message: string): { text: string; color: string 
 
   const match = normalized.match(/^(?:change|make|set)\s+(.+?)\s+(?:button\s+)?(?:colou?r|background(?:\s+colou?r)?)\s+(?:to\s+)?(.+?)$/i);
   if (!match) return null;
+  if (!/\bbutton\b/i.test(match[1]) && !/\bbutton\b/i.test(normalized)) return null;
 
   const text = cleanTargetText(match[1]);
   const color = match[2].trim().replace(/^["'`]+|["'`]+$/g, '');
   if (!text || !color || text.length > 200 || color.length > 100) return null;
 
   return { text, color };
+}
+
+function looksLikeColor(value: string): boolean {
+  return /^(?:#[0-9a-f]{3,8}|rgb\(|hsl\(|red|blue|green|yellow|black|white|gray|grey|orange|purple|pink|brown|cyan|magenta|lime|navy|teal|transparent)\b/i.test(value.trim());
 }
 
 function cleanTargetText(value: string): string {
@@ -144,6 +161,7 @@ export async function runAgent(
   userMessage: string,
   tabId: number,
   config: AgentConfig,
+  history: AgentHistoryMessage[],
   onStep: StepCallback,
   permissionGate: (action: string, args: Record<string, unknown>) => Promise<boolean>
 ): Promise<string> {
@@ -151,6 +169,7 @@ export async function runAgent(
   if (directStyleChange) {
     const args = {
       text: directStyleChange.text,
+      elementKind: 'button',
       styles: {
         backgroundColor: directStyleChange.color,
         borderColor: directStyleChange.color,
@@ -231,8 +250,16 @@ export async function runAgent(
     { role: 'system', content: SYSTEM_PROMPT },
     {
       role: 'user',
-      content: `Current page: ${pageUrl}\n\nTask: ${userMessage}`,
+      content: `Current page: ${pageUrl}`,
     },
+    ...history
+      .filter((m) => m.text.trim())
+      .slice(-12)
+      .map((m): LLMMessage => ({
+        role: m.role === 'agent' ? 'assistant' : 'user',
+        content: m.text,
+      })),
+    { role: 'user', content: `Task: ${userMessage}` },
   ];
 
   let iterations = 0;
