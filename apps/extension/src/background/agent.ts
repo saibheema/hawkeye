@@ -27,6 +27,14 @@ export type StepCallback = (step: AgentStep) => void;
 const REQUIRES_PERMISSION = new Set(['navigate']);
 
 const MAX_ITERATIONS = 10;
+const PAGE_MODIFICATION_TOOLS = new Set([
+  'replace_text',
+  'dom_op',
+  'insert_css',
+  'set_style',
+  'insert_html',
+  'set_css_var',
+]);
 
 const SYSTEM_PROMPT = `You are Hawkeye, an expert browser automation AI.
 You have access to tools to interact with the current web page.
@@ -85,6 +93,24 @@ Iframe handling:
 - Then use click/type_text/select_option with the same iframe_selector to interact with elements inside it.
 - Example: click({ selector: 'button[name="Continue"]', iframe_selector: 'iframe[title="service reservation form"]' })`;
 
+function parseDirectTextReplacement(message: string): { find: string; replace: string } | null {
+  const normalized = message
+    .trim()
+    .replace(/^[\s"'`]*(?:can you|please|pls)\s+/i, '')
+    .replace(/^(?:change|replace|rename|text)\s*[-:]?\s+/i, '');
+
+  const match = normalized.match(/^["'`]?(.+?)["'`]?\s+(?:to|with|as)\s+["'`](.+?)["'`]$/i)
+    ?? normalized.match(/^["'`]?(.+?)["'`]?\s+(?:to|with|as)\s+(.+?)$/i);
+
+  if (!match) return null;
+
+  const find = match[1].trim().replace(/^["'`]+|["'`]+$/g, '');
+  const replace = match[2].trim().replace(/^["'`]+|["'`]+$/g, '');
+  if (!find || !replace || find.length > 200 || replace.length > 500) return null;
+
+  return { find, replace };
+}
+
 export async function runAgent(
   userMessage: string,
   tabId: number,
@@ -92,6 +118,37 @@ export async function runAgent(
   onStep: StepCallback,
   permissionGate: (action: string, args: Record<string, unknown>) => Promise<boolean>
 ): Promise<string> {
+  const directReplacement = parseDirectTextReplacement(userMessage);
+  if (directReplacement) {
+    onStep({
+      type: 'tool_call',
+      content: 'Calling replace_text',
+      tool: 'replace_text',
+      args: { ...directReplacement, case_sensitive: false },
+    });
+
+    const result = await executeTool('replace_text', { ...directReplacement, case_sensitive: false }, tabId);
+    onStep({
+      type: 'tool_result',
+      content: result.ok ? JSON.stringify(result.data ?? { ok: true }) : `ERROR: ${result.error}`,
+      tool: 'replace_text',
+      result: result.data ?? result.error,
+    });
+
+    if (!result.ok) {
+      const answer = `I could not change the text: ${result.error}`;
+      onStep({ type: 'answer', content: answer });
+      return answer;
+    }
+
+    const replaced = (result.data as { replaced?: number } | undefined)?.replaced ?? 0;
+    const answer = replaced > 0
+      ? `Changed "${directReplacement.find}" to "${directReplacement.replace}".`
+      : `I could not find visible text matching "${directReplacement.find}".`;
+    onStep({ type: 'answer', content: answer });
+    return answer;
+  }
+
   const llm = createLLMClient({
     provider: config.provider ?? 'gemini',
     apiKey: config.apiKey,
@@ -173,6 +230,12 @@ export async function runAgent(
       });
 
       toolResultParts.push(`Tool ${name} result: ${resultStr}`);
+
+      if (result.ok && PAGE_MODIFICATION_TOOLS.has(name)) {
+        const answer = `Done. I applied the requested page change using ${name}.`;
+        onStep({ type: 'answer', content: answer });
+        return answer;
+      }
     }
 
     // Feed tool results back to LLM
