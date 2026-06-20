@@ -140,6 +140,8 @@ function ChatPanel() {
   const [messages, setMessages] = useState<ChatMsg[]>([
     { role: 'agent', text: 'Hi! I\'m Hawkeye. Tell me what to do on this page and I\'ll handle it.' },
   ]);
+  const [chatKey, setChatKey] = useState<string | null>(null);
+  const [chatLoaded, setChatLoaded] = useState(false);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [statusLine, setStatusLine] = useState(''); // current tool being called
@@ -151,6 +153,20 @@ function ChatPanel() {
       if (res.gemini_api_key) setApiKey(res.gemini_api_key);
     });
 
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      if (!tab?.id) {
+        setChatLoaded(true);
+        return;
+      }
+      const key = `hawkeye_chat_${tab.id}`;
+      setChatKey(key);
+      chrome.storage.local.get(key, (res) => {
+        const saved = res[key];
+        if (Array.isArray(saved) && saved.length > 0) setMessages(saved.slice(-30));
+        setChatLoaded(true);
+      });
+    });
+
     const storageListener = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
       if (areaName === 'local' && changes.gemini_api_key) {
         setApiKey(changes.gemini_api_key.newValue ?? '');
@@ -159,6 +175,11 @@ function ChatPanel() {
     chrome.storage.onChanged.addListener(storageListener);
     return () => chrome.storage.onChanged.removeListener(storageListener);
   }, []);
+
+  React.useEffect(() => {
+    if (!chatKey || !chatLoaded) return;
+    chrome.storage.local.set({ [chatKey]: messages.slice(-30) });
+  }, [chatKey, chatLoaded, messages]);
 
   React.useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });

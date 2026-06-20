@@ -110,6 +110,7 @@ Iframe handling:
 function parseDirectTextReplacement(message: string): { find: string; replace: string } | null {
   if (/\b(colou?r|background|font|style|border|size)\b/i.test(message)) return null;
   if (/\b(placeholder|text\s*box|textbox|input|field)\b/i.test(message)) return null;
+  if (/\b(same|it|that|this|previous|last|iframe|frame|footer|header)\b/i.test(message)) return null;
 
   const normalized = message
     .trim()
@@ -123,6 +124,7 @@ function parseDirectTextReplacement(message: string): { find: string; replace: s
 
   const find = cleanTargetText(match[1]);
   const replace = match[2].trim().replace(/^["'`]+|["'`]+$/g, '');
+  if (looksLikeColor(replace)) return null;
   if (/\b(button|link|field|input)\b/i.test(match[1]) && looksLikeColor(replace)) return null;
   if (!find || !replace || find.length > 200 || replace.length > 500) return null;
 
@@ -200,6 +202,55 @@ function getSuccessfulMutationSummary(tool: string, data: unknown): string | nul
   if (Number.isFinite(count) && count > 0) return `Done. I updated ${count} matching element${count === 1 ? '' : 's'}.`;
 
   return null;
+}
+
+function compactPageContext(data: unknown): string {
+  const page = (data ?? {}) as any;
+  const frames = (page.frames ?? []).slice(0, 12).map((frame: any) => ({
+    frameId: frame.frameId,
+    url: frame.url,
+    title: frame.title,
+    elements: frame.elementCount,
+    text: frame.textCount,
+    forms: frame.formCount,
+  }));
+  const textSections = (page.textSections ?? []).slice(0, 80).map((section: any) => ({
+    frameId: section.frameId,
+    frameUrl: section.frameUrl,
+    tag: section.tag,
+    text: section.text,
+  }));
+  const elements = (page.elements ?? []).slice(0, 120).map((element: any) => ({
+    frameId: element.frameId,
+    frameUrl: element.frameUrl,
+    tag: element.tag,
+    selector: element.selector,
+    text: element.text,
+    type: element.type,
+    name: element.name,
+    id: element.id,
+    placeholder: element.placeholder,
+    ariaLabel: element.ariaLabel,
+    role: element.role,
+    visible: element.visible,
+    disabled: element.disabled,
+  }));
+  const forms = (page.forms ?? []).slice(0, 20).map((form: any) => ({
+    frameId: form.frameId,
+    frameUrl: form.frameUrl,
+    selector: form.selector,
+    fields: (form.fields ?? []).slice(0, 30),
+  }));
+
+  return JSON.stringify({
+    url: page.url,
+    title: page.title,
+    frames,
+    textSections,
+    elements,
+    forms,
+    warning: page.warning,
+  });
 }
 
 export async function runAgent(
@@ -321,12 +372,16 @@ export async function runAgent(
   // Get current page URL to give context
   const tab = await chrome.tabs.get(tabId);
   const pageUrl = tab.url ?? 'unknown';
+  const pageContext = await executeTool('read_page', {}, tabId);
+  const contextText = pageContext.ok
+    ? compactPageContext(pageContext.data)
+    : JSON.stringify({ warning: pageContext.error });
 
   const messages: LLMMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
     {
       role: 'user',
-      content: `Current page: ${pageUrl}`,
+      content: `Current page: ${pageUrl}\n\nCompact current DOM/frame context:\n${contextText}`,
     },
     ...history
       .filter((m) => m.text.trim())

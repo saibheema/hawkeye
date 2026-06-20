@@ -658,7 +658,7 @@ export async function executeTool(
       case 'insert_css': {
         const css = args.css as string;
         await chrome.scripting.insertCSS({
-          target: { tabId },
+          target: { tabId, allFrames: true },
           css,
         });
         // Persist so content script can re-inject after page reload
