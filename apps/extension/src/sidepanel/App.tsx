@@ -25,6 +25,18 @@ const C = {
 };
 
 type Panel = 'mods' | 'settings' | 'flows' | null;
+type PickedElement = {
+  selector: string;
+  tagName?: string;
+  text?: string;
+  ariaLabel?: string;
+  type?: string;
+  name?: string;
+  id?: string;
+  pageUrl?: string;
+  instruction?: string;
+  boundingBox?: { top: number; left: number; width: number; height: number };
+};
 
 function isPageTab(tab: chrome.tabs.Tab): boolean {
   return /^(https?:|file:)/.test(tab.url ?? '');
@@ -36,13 +48,57 @@ async function getCurrentPageTab(): Promise<chrome.tabs.Tab | undefined> {
 }
 
 // ─── Reset Button ─────────────────────────────────────────────────────────────
+function ElementPickerButton({ picking, setPicking }: { picking: boolean; setPicking: (value: boolean) => void }) {
+  const startPicker = async () => {
+    const tab = await getCurrentPageTab();
+    if (!tab?.id) return;
+    setPicking(true);
+    chrome.tabs.sendMessage(tab.id, { type: 'PICKER_START', payload: { promptForChange: false } }, (res) => {
+      const error = chrome.runtime.lastError;
+      if (error || !res?.ok) setPicking(false);
+    });
+  };
+
+  const stopPicker = async () => {
+    const tab = await getCurrentPageTab();
+    if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'PICKER_STOP' }, () => { void chrome.runtime.lastError; });
+    setPicking(false);
+  };
+
+  return (
+    <button
+      onClick={picking ? stopPicker : startPicker}
+      title={picking ? 'Cancel element picker' : 'Pick an element to target your next Hawkeye message'}
+      style={{
+        background: picking ? C.accentBg : C.bgHover,
+        border: `1px solid ${picking ? C.accent : C.border}`,
+        borderRadius: C.radiusSm,
+        width: 28,
+        height: 24,
+        color: picking ? C.accent : C.textSecond,
+        cursor: 'pointer',
+        fontFamily: C.font,
+        fontSize: 15,
+        fontWeight: 700,
+        lineHeight: 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        transition: 'all 0.15s',
+      }}
+    >
+      ⌖
+    </button>
+  );
+}
+
 function ResetButton() {
   const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState(false);
 
   const handleClick = async () => {
     if (!confirming) { setConfirming(true); return; }
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await getCurrentPageTab();
     const allStorage = await chrome.storage.local.get(null);
     const persistedKeys = Object.keys(allStorage).filter((key) =>
       key.startsWith('hawkeye_css_') || key.startsWith('hawkeye_dom_mutations_')
@@ -79,6 +135,8 @@ function ResetButton() {
 export function App() {
   const [panel, setPanel] = useState<Panel>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pickedElement, setPickedElement] = useState<PickedElement | null>(null);
+  const [picking, setPicking] = useState(false);
   const menuRef = React.useRef<HTMLDivElement>(null);
   const openDashboard = () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('src/dashboard/index.html') });
@@ -90,6 +148,18 @@ export function App() {
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  React.useEffect(() => {
+    const listener = (msg: any) => {
+      if (msg.type === 'ELEMENT_SELECTED') {
+        setPickedElement(msg.payload as PickedElement);
+        setPicking(false);
+      }
+      if (msg.type === 'PICKER_CANCELLED') setPicking(false);
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
 
   return (
@@ -112,7 +182,7 @@ export function App() {
               >
                 <span>▣</span>Dashboard
               </button>
-              {([['mods', '🎯', 'UI Mods'], ['flows', '🔄', 'Record Flows'], ['settings', '⚙️', 'Settings']] as [NonNullable<Panel>, string, string][]).map(([p, icon, label]) => (
+              {([['flows', '🔄', 'Record Flows'], ['settings', '⚙️', 'Settings']] as [NonNullable<Panel>, string, string][]).map(([p, icon, label]) => (
                 <button key={p} onClick={() => { setPanel(panel === p ? null : p); setMenuOpen(false); }}
                   style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '9px 14px', background: panel === p ? C.accentBg : 'none', border: 'none', textAlign: 'left', fontSize: 13, color: panel === p ? C.accent : C.text, cursor: 'pointer', fontFamily: C.font, fontWeight: panel === p ? 600 : 400 }}
                 >
@@ -127,6 +197,7 @@ export function App() {
         <span style={{ fontSize: 16, lineHeight: 1 }}>🦅</span>
         <span style={{ fontWeight: 600, fontSize: 14, color: C.text, letterSpacing: '-0.2px' }}>Hawkeye</span>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: C.textMuted }}>v0.1</span>
+        <ElementPickerButton picking={picking} setPicking={setPicking} />
         <ResetButton />
       </div>
 
@@ -145,7 +216,7 @@ export function App() {
 
       {/* Chat fills remaining space */}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <ChatPanel />
+        <ChatPanel pickedElement={pickedElement} clearPickedElement={() => setPickedElement(null)} />
       </div>
     </div>
   );
@@ -156,7 +227,13 @@ export function App() {
 type ChatMsg = { role: 'user' | 'agent'; text: string; isError?: boolean };
 const CHAT_GREETING: ChatMsg = { role: 'agent', text: 'Hi! I\'m Hawkeye. Tell me what to do on this page and I\'ll handle it.' };
 
-function ChatPanel() {
+function ChatPanel({
+  pickedElement,
+  clearPickedElement,
+}: {
+  pickedElement: PickedElement | null;
+  clearPickedElement: () => void;
+}) {
   const [messages, setMessages] = useState<ChatMsg[]>([CHAT_GREETING]);
   const [chatKey, setChatKey] = useState<string | null>(null);
   const [chatLoaded, setChatLoaded] = useState(false);
@@ -171,7 +248,7 @@ function ChatPanel() {
       if (res.gemini_api_key) setApiKey(res.gemini_api_key);
     });
 
-    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+    getCurrentPageTab().then((tab) => {
       if (!tab?.id) {
         setChatLoaded(true);
         return;
@@ -241,7 +318,16 @@ function ChatPanel() {
       return;
     }
     if (key !== apiKey) setApiKey(key);
-    const task = input.trim();
+    const visibleTask = input.trim();
+    const task = pickedElement
+      ? [
+          'The user selected one exact element with the Hawkeye element picker.',
+          `Selector: ${pickedElement.selector}`,
+          `Element: ${pickedElement.tagName ?? 'element'}${pickedElement.text ? ` with text "${pickedElement.text}"` : ''}${pickedElement.ariaLabel ? ` and aria-label "${pickedElement.ariaLabel}"` : ''}`,
+          `User request for that selected element: ${visibleTask}`,
+          'Apply the request ONLY to that selected element. Use the selector exactly. Choose the best tool: dom_op for text/attributes/removal, set_style for visual styles, insert_html for inserting content. Do not search for a different element by visible text.',
+        ].join('\n')
+      : visibleTask;
     const history = messages
       .filter((m) => !m.isError && m.text !== CHAT_GREETING.text)
       .slice(-8)
@@ -249,8 +335,8 @@ function ChatPanel() {
     setInput('');
     setRunning(true);
     setStatusLine('Reading page…');
-    setMessages(m => [...m, { role: 'user', text: task }]);
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    setMessages(m => [...m, { role: 'user', text: visibleTask }]);
+    const tab = await getCurrentPageTab();
     if (!tab?.id) {
       setRunning(false);
       setStatusLine('');
@@ -301,30 +387,42 @@ function ChatPanel() {
       </div>
 
       {/* Input bar */}
-      <div style={{ padding: '10px 12px', borderTop: `1px solid ${C.border}`, display: 'flex', gap: 8, alignItems: 'center', background: C.bg }}>
-        <button
-          onClick={clearChat}
-          disabled={running || messages.length <= 1}
-          title="Clear chat context for this tab"
-          style={{ background: C.bgHover, border: `1px solid ${C.border}`, borderRadius: C.radiusSm, padding: '7px 8px', color: running || messages.length <= 1 ? C.textMuted : C.textSecond, fontSize: 11, fontWeight: 600, cursor: running || messages.length <= 1 ? 'not-allowed' : 'pointer', fontFamily: C.font, whiteSpace: 'nowrap' }}
-        >
-          Clear
-        </button>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && send()}
-          placeholder={running ? '' : 'Tell Hawkeye what to do…'}
-          disabled={running}
-          style={{ flex: 1, background: running ? C.bgSubtle : C.bgSubtle, border: `1px solid ${C.border}`, borderRadius: 20, padding: '8px 14px', color: C.text, fontSize: 13, outline: 'none', fontFamily: C.font, opacity: running ? 0.5 : 1 }}
-        />
-        <button
-          onClick={send}
-          disabled={running || !input.trim()}
-          style={{ background: (running || !input.trim()) ? C.bgHover : C.accent, border: 'none', borderRadius: '50%', width: 34, height: 34, flexShrink: 0, color: (running || !input.trim()) ? C.textMuted : '#fff', cursor: (running || !input.trim()) ? 'not-allowed' : 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }}
-        >
-          ➤
-        </button>
+      <div style={{ padding: '8px 12px 10px', borderTop: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 8, background: C.bg }}>
+        {pickedElement && (
+          <div style={{ border: `1px solid ${C.accent}`, background: C.accentBg, borderRadius: C.radiusSm, padding: '6px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ color: C.accent, fontSize: 13, fontWeight: 700 }}>⌖</span>
+            <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <span style={{ color: C.text, fontSize: 11, fontWeight: 700 }}>Selected {pickedElement.tagName ?? 'element'}</span>
+              <span style={{ color: C.textSecond, fontSize: 10, fontFamily: C.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pickedElement.selector}</span>
+            </div>
+            <button onClick={clearPickedElement} title="Clear selected element" style={{ background: 'none', border: 'none', color: C.textSecond, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            onClick={clearChat}
+            disabled={running || messages.length <= 1}
+            title="Clear chat context for this tab"
+            style={{ background: C.bgHover, border: `1px solid ${C.border}`, borderRadius: C.radiusSm, padding: '7px 8px', color: running || messages.length <= 1 ? C.textMuted : C.textSecond, fontSize: 11, fontWeight: 600, cursor: running || messages.length <= 1 ? 'not-allowed' : 'pointer', fontFamily: C.font, whiteSpace: 'nowrap' }}
+          >
+            Clear
+          </button>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && send()}
+            placeholder={running ? '' : pickedElement ? 'Tell Hawkeye how to change the selected element…' : 'Tell Hawkeye what to do…'}
+            disabled={running}
+            style={{ flex: 1, background: running ? C.bgSubtle : C.bgSubtle, border: `1px solid ${pickedElement ? C.accent : C.border}`, borderRadius: 20, padding: '8px 14px', color: C.text, fontSize: 13, outline: 'none', fontFamily: C.font, opacity: running ? 0.5 : 1 }}
+          />
+          <button
+            onClick={send}
+            disabled={running || !input.trim()}
+            style={{ background: (running || !input.trim()) ? C.bgHover : C.accent, border: 'none', borderRadius: '50%', width: 34, height: 34, flexShrink: 0, color: (running || !input.trim()) ? C.textMuted : '#fff', cursor: (running || !input.trim()) ? 'not-allowed' : 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }}
+          >
+            ➤
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -804,19 +902,6 @@ function FlowsPanel() {
 }
 
 // ─── UI Mods Panel ────────────────────────────────────────────────────────────
-
-type PickedElement = {
-  selector: string;
-  tagName?: string;
-  text?: string;
-  ariaLabel?: string;
-  type?: string;
-  name?: string;
-  id?: string;
-  pageUrl?: string;
-  instruction?: string;
-  boundingBox?: { top: number; left: number; width: number; height: number };
-};
 
 function UIModsPanel() {
   const [domain, setDomain] = useState('');

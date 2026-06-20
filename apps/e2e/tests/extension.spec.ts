@@ -1073,7 +1073,7 @@ test('agent direct icon command updates icon-only controls', async ({ context, e
   });
 });
 
-test('UI Mods picker captures an exact selected element change request', async ({ context, extensionId }) => {
+test('header picker scopes the next chat instruction to the selected element', async ({ context, extensionId }) => {
   const html = `<!doctype html>
     <html>
       <body>
@@ -1089,34 +1089,27 @@ test('UI Mods picker captures an exact selected element change request', async (
 
     const extensionPage = await context.newPage();
     await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    await extensionPage.evaluate(() => chrome.storage.local.set({ gemini_api_key: 'not-needed-for-direct-picker' }));
 
-    await extensionPage.getByText('Actions').click();
-    await extensionPage.getByText('UI Mods').click();
-    await extensionPage.getByText('Pick element').click();
-
+    await extensionPage.getByTitle('Pick an element to target your next Hawkeye message').click();
     await target.locator('#targetButton').click();
-    await expect(target.locator('#__hawkeye_picker_prompt__')).toBeVisible();
-    await expect(target.locator('#__hawkeye_picker_prompt__')).toContainText('Original button');
 
-    const selectedPromise = extensionPage.evaluate(() => new Promise<any>((resolve) => {
-      const listener = (msg: any) => {
-        if (msg.type === 'ELEMENT_CHANGE_REQUESTED') {
-          chrome.runtime.onMessage.removeListener(listener);
-          resolve(msg.payload);
-        }
-      };
-      chrome.runtime.onMessage.addListener(listener);
-    }));
+    await expect(extensionPage.getByText('Selected button')).toBeVisible();
+    await expect(extensionPage.getByText('#targetButton')).toBeVisible();
 
-    await target.locator('#__hawkeye_picker_prompt__ textarea').fill('rename to Client');
-    await target.locator('#__hawkeye_picker_prompt__ button', { hasText: 'Apply' }).click();
+    await extensionPage.getByPlaceholder('Tell Hawkeye how to change the selected element…').fill('rename to Client');
+    await extensionPage.locator('button').filter({ hasText: '➤' }).click();
 
-    const selected = await selectedPromise;
-    expect(selected.selector).toBe('#targetButton');
-    expect(selected.instruction).toBe('rename to Client');
-    expect(selected.text).toContain('Original button');
+    const tabId = await getTabId(extensionPage, baseUrl);
+    await expect.poll(async () => {
+      const res = await sendExtensionMessage(extensionPage, { type: 'AGENT_STATE_GET', tabId });
+      return res?.state?.task ?? '';
+    }, { timeout: 10_000 }).toContain('Selector: #targetButton');
 
-    await expect(target.locator('#__hawkeye_picker_prompt__')).toHaveCount(0);
+    const res = await sendExtensionMessage(extensionPage, { type: 'AGENT_STATE_GET', tabId });
+    expect(res.state.task).toContain('User request for that selected element: rename to Client');
+    expect(res.state.task).toContain('Apply the request ONLY to that selected element');
+
     await extensionPage.close();
     await target.close();
   });
