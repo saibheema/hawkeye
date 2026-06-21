@@ -395,6 +395,67 @@ test('replays Google-style jsaction show more controls when selectors drift', as
   });
 });
 
+test('replays without waiting for unrelated background network noise', async ({ context, extensionId }) => {
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <button id="a">Alpha</button>
+        <button id="b">Beta</button>
+        <button id="c">Gamma</button>
+        <button id="d">Delta</button>
+        <div id="result">0</div>
+        <script>
+          let count = 0;
+          for (const button of document.querySelectorAll('button')) {
+            button.addEventListener('click', () => {
+              count += 1;
+              document.querySelector('#result').textContent = String(count);
+            });
+          }
+          setInterval(() => {
+            fetch('/noise?' + Date.now(), { cache: 'no-store' }).catch(() => {});
+          }, 80);
+        </script>
+      </body>
+    </html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+    const clickStep = (selector: string, label: string) => ({
+      tool: 'click',
+      args: { selector, label, text: label, tagName: 'button', clickKind: 'click' },
+      meta: { source: 'manual', label },
+    });
+    const flow = {
+      id: 'flow_network_noise',
+      name: 'Network noise replay',
+      domain: '127.0.0.1',
+      startUrl: baseUrl,
+      createdAt: Date.now(),
+      stepCount: 4,
+      steps: [
+        clickStep('#a', 'Alpha'),
+        clickStep('#b', 'Beta'),
+        clickStep('#c', 'Gamma'),
+        clickStep('#d', 'Delta'),
+      ],
+    };
+
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results[0].ok).toBe(true);
+    expect(results[0].durationMs).toBeLessThan(8_000);
+    await expect(target.locator('#result')).toHaveText('4');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('records Enter key submissions as replayable steps', async ({ context, extensionId }) => {
   const html = `<!doctype html>
     <html>
