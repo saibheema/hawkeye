@@ -199,6 +199,8 @@ export async function replayFlow(
     let error: string | undefined;
     let debug: ReplayDebug | undefined;
     const pendingScreenState: Array<{ step: FlowStep; args: Record<string, unknown>; stepIndex: number }> = [];
+    let lastProceed: { step: FlowStep; args: Record<string, unknown>; stepIndex: number } | null = null;
+    const retriedProceedBeforeStep = new Set<number>();
 
     if (startUrl) {
       const nav = await executeTool('navigate', { url: startUrl }, tabId);
@@ -236,7 +238,17 @@ export async function replayFlow(
       }
 
       await waitBeforeReplayStep(tabId, step, args, getNetworkActivity);
-      const res = await executeToolWithTimeout(step.tool, args, tabId, REPLAY_STEP_TIMEOUT_MS);
+      let res = await executeToolWithTimeout(step.tool, args, tabId, REPLAY_STEP_TIMEOUT_MS);
+      if (!res.ok && lastProceed && lastProceed.stepIndex < si && isMissingReplayTargetError(res.error) && !retriedProceedBeforeStep.has(si)) {
+        retriedProceedBeforeStep.add(si);
+        await waitBeforeReplayStep(tabId, lastProceed.step, lastProceed.args, getNetworkActivity);
+        const proceedRetry = await executeToolWithTimeout(lastProceed.step.tool, lastProceed.args, tabId, REPLAY_STEP_TIMEOUT_MS);
+        if (proceedRetry.ok) {
+          await waitAfterReplayStep(tabId, lastProceed.step, lastProceed.args, getNetworkActivity);
+          await waitBeforeReplayStep(tabId, step, args, getNetworkActivity);
+          res = await executeToolWithTimeout(step.tool, args, tabId, REPLAY_STEP_TIMEOUT_MS);
+        }
+      }
       if (!res.ok) {
         ok = false;
         failedStep = si;
@@ -248,7 +260,10 @@ export async function replayFlow(
 
       await waitAfterReplayStep(tabId, step, args, getNetworkActivity);
       if (isStatefulStep(step, args)) upsertPendingState(pendingScreenState, { step, args, stepIndex: si });
-      if (isProceedStep(step, args)) pendingScreenState.length = 0;
+      if (isProceedStep(step, args)) {
+        lastProceed = { step, args, stepIndex: si };
+        pendingScreenState.length = 0;
+      }
     }
 
     const result: RunResult = {
@@ -345,6 +360,10 @@ async function executeToolWithTimeout(
   const result = await Promise.race([executeTool(tool, args, tabId), timeout]);
   if (timeoutId !== undefined) self.clearTimeout(timeoutId);
   return result;
+}
+
+function isMissingReplayTargetError(error?: string): boolean {
+  return /\b(?:element|input|select)\s+not\s+found\b/i.test(String(error ?? ''));
 }
 
 function upsertPendingState(
