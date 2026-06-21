@@ -380,10 +380,10 @@ export async function executeTool(
           const res = await execInFrameId(tabId, frameId,
             async (o: Record<string, any>) => {
               const el = await waitForReplayElement(o, 'click') as HTMLElement | null;
-              if (!el) return { ok: false, error: `Element not found in frame: ${o.selector}` };
+              if (!el) return { ok: false, error: `Element not found in frame: ${describeMissingReplayTarget(o)}` };
               await performReplayClick(el);
               await ensureSelectedState(el, o);
-              return { ok: true };
+              return { ok: true, clickedText: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120), href: (el as HTMLAnchorElement).href || null, frameUrl: location.href };
               async function performReplayClick(el: HTMLElement) {
                 el.scrollIntoView?.({ block: 'center', inline: 'center' });
                 await new Promise((resolve) => setTimeout(resolve, 40));
@@ -401,8 +401,15 @@ export async function executeTool(
                   const expected = payload.checked === false ? false : true;
                   const deadline = Date.now() + 600;
                   while (el.isConnected && el.checked !== expected && Date.now() < deadline) {
-                    await performReplayClick(el);
+                    await performReplayClick(choiceClickTarget(el) ?? el);
                     await new Promise((resolve) => setTimeout(resolve, 80));
+                  }
+                  if (el.isConnected && el.checked !== expected) {
+                    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked')?.set;
+                    if (setter) setter.call(el, expected);
+                    else el.checked = expected;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
                   }
                   return;
                 }
@@ -426,12 +433,29 @@ export async function executeTool(
                 if (checked) return true;
                 return null;
               }
+              function choiceClickTarget(input: HTMLInputElement): HTMLElement | null {
+                if (input.id) {
+                  const label = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
+                  if (label instanceof HTMLElement && isVisible(label)) return label;
+                }
+                const wrapped = input.closest('label');
+                if (wrapped instanceof HTMLElement && isVisible(wrapped)) return wrapped;
+                const tile = input.closest('[class*="tile" i],[class*="card" i],[class*="option" i],[role="checkbox"],[role="radio"]');
+                return tile instanceof HTMLElement && isVisible(tile) ? tile : null;
+              }
+              function isVisible(node: HTMLElement): boolean {
+                const rect = node.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return false;
+                const style = getComputedStyle(node);
+                return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+              }
               function findReplayElement(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
                 if (kind === 'click') {
                   const choice = findChoiceElement(payload);
                   if (choice) return choice;
                   const semantic = findRecordedClickElement(payload);
                   if (semantic) return semantic;
+                  if (hasSemanticClickIntent(payload) && isBrittleClickSelector(payload.selector)) return null;
                 }
                 const selectors = [payload.selector, ...(Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type === 'css').map((c: any) => c.selector || c.value) : [])].filter(Boolean);
                 for (const selector of selectors) {
@@ -446,6 +470,15 @@ export async function executeTool(
                 if (kind === 'select') return el instanceof HTMLSelectElement;
                 if (kind === 'type') return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
                 return el instanceof HTMLElement;
+              }
+              function hasSemanticClickIntent(payload: Record<string, any>) {
+                const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates : [];
+                return [payload.label, payload.text, ...candidates.filter((c: any) => ['label', 'text', 'aria'].includes(c.type)).map((c: any) => c.value)]
+                  .some((value: any) => String(value ?? '').trim().length > 0);
+              }
+              function isBrittleClickSelector(selector: any) {
+                const value = String(selector ?? '');
+                return value.includes('>') || /:nth-(?:of-type|child)\(/i.test(value);
               }
               function findBySemantic(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
                 const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
@@ -498,17 +531,31 @@ export async function executeTool(
                   '[class*="time" i]',
                 ].join(','))).filter(isUsableClickTarget);
                 const ranked = elements
-                  .map((el) => ({ el, text: normalize([labelFor(el), textFor(el), attrText(el)].filter(Boolean).join(' ')) }))
-                  .filter((item) => item.text);
+                  .map((el) => ({
+                    el,
+                    direct: normalize([textFor(el), attrText(el)].filter(Boolean).join(' ')),
+                    context: normalize([labelFor(el), textFor(el), attrText(el)].filter(Boolean).join(' ')),
+                  }))
+                  .filter((item) => item.direct || item.context);
                 for (const needle of needles) {
-                  const exact = ranked.filter((item) => item.text === needle).sort((a, b) => a.text.length - b.text.length)[0];
+                  const exact = ranked.filter((item) => item.direct === needle || item.context === needle)
+                    .sort((a, b) => Number(b.direct === needle) - Number(a.direct === needle) || (a.direct || a.context).length - (b.direct || b.context).length)[0];
                   if (exact) return exact.el;
                 }
                 for (const needle of needles.filter((value: string) => value.length > 2)) {
-                  const contains = ranked.filter((item) => item.text.includes(needle)).sort((a, b) => a.text.length - b.text.length)[0];
+                  const contains = ranked.filter((item) => item.direct.includes(needle) || item.context.includes(needle))
+                    .sort((a, b) => Number(b.direct.includes(needle)) - Number(a.direct.includes(needle)) || (a.direct || a.context).length - (b.direct || b.context).length)[0];
                   if (contains) return contains.el;
                 }
                 return null;
+              }
+              function describeMissingReplayTarget(payload: Record<string, any>) {
+                const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates : [];
+                const labels = [payload.label, payload.text, payload.selector, ...candidates.map((c: any) => c.value ?? c.selector)]
+                  .map((value: any) => String(value ?? '').trim())
+                  .filter(Boolean)
+                  .slice(0, 6);
+                return labels.join(' | ') || 'unknown click target';
               }
               function isUsableClickTarget(el: Element): boolean {
                 if (!(el instanceof HTMLElement)) return false;
@@ -523,6 +570,13 @@ export async function executeTool(
                 const selectorText = String(payload.selector ?? '').toLowerCase();
                 const isChoice = inputType === 'radio' || inputType === 'checkbox' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
                 if (!isChoice) return null;
+                const forId = String(payload.forId ?? '');
+                if (forId) {
+                  const control = document.getElementById(forId);
+                  if (control && matchesKind(control, 'click')) return control;
+                  const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
+                  if (label && matchesKind(label, 'click')) return label;
+                }
                 const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]'));
                 const labelNeedles = [payload.label, ...candidates.filter((c: any) => ['label', 'text', 'aria'].includes(c.type)).map((c: any) => c.value)]
                   .map((value: any) => normalize(String(value ?? '')))
@@ -572,16 +626,25 @@ export async function executeTool(
                 return el;
               }
             }, args);
-          return res.ok ? { ok: true, data: { clicked: args.selector } } : res;
+          if (!res.ok && isMissingTargetError(res.error)) {
+            const fallback = await semanticClickAcrossFrames(tabId, args);
+            if (fallback.ok) return fallback;
+          }
+          return res.ok ? { ok: true, data: { clicked: args.selector, ...res } } : res;
+        }
+        let frameHintFallback: ToolResult | null = null;
+        if (hasRecordedFrameHint(args)) {
+          frameHintFallback = await semanticClickAcrossFrames(tabId, args);
+          if (frameHintFallback.ok) return frameHintFallback;
         }
         if (args.iframe_selector) {
           const res = await execInFrame(tabId, args.iframe_selector as string,
             async (o: Record<string, any>) => {
               const el = await waitForReplayElement(o, 'click') as HTMLElement | null;
-              if (!el) return { ok: false, error: `Element not found in iframe: ${o.selector}` };
+              if (!el) return { ok: false, error: `Element not found in iframe: ${describeMissingReplayTarget(o)}` };
               await performReplayClick(el);
               await ensureSelectedState(el, o);
-              return { ok: true };
+              return { ok: true, clickedText: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120), href: (el as HTMLAnchorElement).href || null, frameUrl: location.href };
               async function performReplayClick(el: HTMLElement) {
                 el.scrollIntoView?.({ block: 'center', inline: 'center' });
                 await new Promise((resolve) => setTimeout(resolve, 40));
@@ -599,8 +662,15 @@ export async function executeTool(
                   const expected = payload.checked === false ? false : true;
                   const deadline = Date.now() + 600;
                   while (el.isConnected && el.checked !== expected && Date.now() < deadline) {
-                    await performReplayClick(el);
+                    await performReplayClick(choiceClickTarget(el) ?? el);
                     await new Promise((resolve) => setTimeout(resolve, 80));
+                  }
+                  if (el.isConnected && el.checked !== expected) {
+                    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked')?.set;
+                    if (setter) setter.call(el, expected);
+                    else el.checked = expected;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
                   }
                   return;
                 }
@@ -624,12 +694,29 @@ export async function executeTool(
                 if (checked) return true;
                 return null;
               }
+              function choiceClickTarget(input: HTMLInputElement): HTMLElement | null {
+                if (input.id) {
+                  const label = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
+                  if (label instanceof HTMLElement && isVisible(label)) return label;
+                }
+                const wrapped = input.closest('label');
+                if (wrapped instanceof HTMLElement && isVisible(wrapped)) return wrapped;
+                const tile = input.closest('[class*="tile" i],[class*="card" i],[class*="option" i],[role="checkbox"],[role="radio"]');
+                return tile instanceof HTMLElement && isVisible(tile) ? tile : null;
+              }
+              function isVisible(node: HTMLElement): boolean {
+                const rect = node.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return false;
+                const style = getComputedStyle(node);
+                return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+              }
               function findReplayElement(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
                 if (kind === 'click') {
                   const choice = findChoiceElement(payload);
                   if (choice) return choice;
                   const semantic = findRecordedClickElement(payload);
                   if (semantic) return semantic;
+                  if (hasSemanticClickIntent(payload) && isBrittleClickSelector(payload.selector)) return null;
                 }
                 const selectors = [payload.selector, ...(Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type === 'css').map((c: any) => c.selector || c.value) : [])].filter(Boolean);
                 for (const selector of selectors) {
@@ -644,6 +731,15 @@ export async function executeTool(
                 if (kind === 'select') return el instanceof HTMLSelectElement;
                 if (kind === 'type') return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
                 return el instanceof HTMLElement;
+              }
+              function hasSemanticClickIntent(payload: Record<string, any>) {
+                const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates : [];
+                return [payload.label, payload.text, ...candidates.filter((c: any) => ['label', 'text', 'aria'].includes(c.type)).map((c: any) => c.value)]
+                  .some((value: any) => String(value ?? '').trim().length > 0);
+              }
+              function isBrittleClickSelector(selector: any) {
+                const value = String(selector ?? '');
+                return value.includes('>') || /:nth-(?:of-type|child)\(/i.test(value);
               }
               function findBySemantic(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
                 const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
@@ -696,17 +792,31 @@ export async function executeTool(
                   '[class*="time" i]',
                 ].join(','))).filter(isUsableClickTarget);
                 const ranked = elements
-                  .map((el) => ({ el, text: normalize([labelFor(el), textFor(el), attrText(el)].filter(Boolean).join(' ')) }))
-                  .filter((item) => item.text);
+                  .map((el) => ({
+                    el,
+                    direct: normalize([textFor(el), attrText(el)].filter(Boolean).join(' ')),
+                    context: normalize([labelFor(el), textFor(el), attrText(el)].filter(Boolean).join(' ')),
+                  }))
+                  .filter((item) => item.direct || item.context);
                 for (const needle of needles) {
-                  const exact = ranked.filter((item) => item.text === needle).sort((a, b) => a.text.length - b.text.length)[0];
+                  const exact = ranked.filter((item) => item.direct === needle || item.context === needle)
+                    .sort((a, b) => Number(b.direct === needle) - Number(a.direct === needle) || (a.direct || a.context).length - (b.direct || b.context).length)[0];
                   if (exact) return exact.el;
                 }
                 for (const needle of needles.filter((value: string) => value.length > 2)) {
-                  const contains = ranked.filter((item) => item.text.includes(needle)).sort((a, b) => a.text.length - b.text.length)[0];
+                  const contains = ranked.filter((item) => item.direct.includes(needle) || item.context.includes(needle))
+                    .sort((a, b) => Number(b.direct.includes(needle)) - Number(a.direct.includes(needle)) || (a.direct || a.context).length - (b.direct || b.context).length)[0];
                   if (contains) return contains.el;
                 }
                 return null;
+              }
+              function describeMissingReplayTarget(payload: Record<string, any>) {
+                const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates : [];
+                const labels = [payload.label, payload.text, payload.selector, ...candidates.map((c: any) => c.value ?? c.selector)]
+                  .map((value: any) => String(value ?? '').trim())
+                  .filter(Boolean)
+                  .slice(0, 6);
+                return labels.join(' | ') || 'unknown click target';
               }
               function isUsableClickTarget(el: Element): boolean {
                 if (!(el instanceof HTMLElement)) return false;
@@ -721,6 +831,13 @@ export async function executeTool(
                 const selectorText = String(payload.selector ?? '').toLowerCase();
                 const isChoice = inputType === 'radio' || inputType === 'checkbox' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
                 if (!isChoice) return null;
+                const forId = String(payload.forId ?? '');
+                if (forId) {
+                  const control = document.getElementById(forId);
+                  if (control && matchesKind(control, 'click')) return control;
+                  const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
+                  if (label && matchesKind(label, 'click')) return label;
+                }
                 const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]'));
                 const labelNeedles = [payload.label, ...candidates.filter((c: any) => ['label', 'text', 'aria'].includes(c.type)).map((c: any) => c.value)]
                   .map((value: any) => normalize(String(value ?? '')))
@@ -770,8 +887,13 @@ export async function executeTool(
                 return el;
               }
             }, args);
-          return res.ok ? { ok: true, data: { clicked: args.selector } } : res;
+          if (!res.ok && isMissingTargetError(res.error)) {
+            const fallback = await semanticClickAcrossFrames(tabId, args);
+            if (fallback.ok) return fallback;
+          }
+          return res.ok ? { ok: true, data: { clicked: args.selector, ...res } } : res;
         }
+        if (frameHintFallback) return frameHintFallback;
         const res = await sendToContent(tabId, { type: 'DOM_CLICK', payload: args });
         return res.ok
           ? { ok: true, data: { clicked: args.selector } }
@@ -872,6 +994,7 @@ export async function executeTool(
             }, args);
           return res.ok ? { ok: true, data: { typed: args.text } } : res;
         }
+        if (hasRecordedFrameHint(args)) return recordedFrameUnavailable(args, 'input');
         const res = await sendToContent(tabId, { type: 'DOM_TYPE', payload: args });
         return res.ok
           ? { ok: true, data: { typed: args.text } }
@@ -1024,6 +1147,7 @@ export async function executeTool(
             }, args);
           return res.ok ? { ok: true, data: { selected: args.value } } : res;
         }
+        if (hasRecordedFrameHint(args)) return recordedFrameUnavailable(args, 'select');
         const res = await sendToContent(tabId, { type: 'DOM_SELECT', payload: args });
         return res.ok
           ? { ok: true, data: { selected: args.value } }
@@ -1399,6 +1523,13 @@ export async function executeTool(
             const selectorText = String(payload.selector ?? '').toLowerCase();
             const isChoice = inputType === 'radio' || inputType === 'checkbox' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
             if (!isChoice) return null;
+            const forId = String(payload.forId ?? '');
+            if (forId) {
+              const control = document.getElementById(forId);
+              if (control && matchesKind(control, 'click')) return control;
+              const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
+              if (label && matchesKind(label, 'click')) return label;
+            }
             const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]'));
             const labelNeedles = [payload.label, ...candidates.filter((candidate: any) => ['label', 'text', 'aria'].includes(candidate.type)).map((candidate: any) => candidate.value)]
               .map((value: any) => normalize(String(value ?? '')))
@@ -1458,14 +1589,20 @@ export async function executeTool(
               '[class*="time" i]',
             ].join(','))).filter(isUsableClickTarget);
             const ranked = elements
-              .map((node) => ({ el: node, text: normalize([labelFor(node), textFor(node), attrText(node)].filter(Boolean).join(' ')) }))
-              .filter((item) => item.text);
+              .map((node) => ({
+                el: node,
+                direct: normalize([textFor(node), attrText(node)].filter(Boolean).join(' ')),
+                context: normalize([labelFor(node), textFor(node), attrText(node)].filter(Boolean).join(' ')),
+              }))
+              .filter((item) => item.direct || item.context);
             for (const needle of needles) {
-              const exact = ranked.filter((item) => item.text === needle).sort((x, y) => x.text.length - y.text.length)[0];
+              const exact = ranked.filter((item) => item.direct === needle || item.context === needle)
+                .sort((x, y) => Number(y.direct === needle) - Number(x.direct === needle) || (x.direct || x.context).length - (y.direct || y.context).length)[0];
               if (exact) return exact.el;
             }
             for (const needle of needles.filter((value: string) => value.length > 2)) {
-              const contains = ranked.filter((item) => item.text.includes(needle)).sort((x, y) => x.text.length - y.text.length)[0];
+              const contains = ranked.filter((item) => item.direct.includes(needle) || item.context.includes(needle))
+                .sort((x, y) => Number(y.direct.includes(needle)) - Number(x.direct.includes(needle)) || (x.direct || x.context).length - (y.direct || y.context).length)[0];
               if (contains) return contains.el;
             }
             return null;
@@ -2771,6 +2908,137 @@ function waitForTabLoad(tabId: number, timeoutMs = 30_000): Promise<void> {
   });
 }
 
+function isMissingTargetError(error?: string): boolean {
+  return /\b(?:element|input|select)\s+not\s+found\b/i.test(String(error ?? '')) || /\bno\s+frame\s+with\s+id\b/i.test(String(error ?? ''));
+}
+
+function hasRecordedFrameHint(args: Record<string, unknown>): boolean {
+  return typeof args.frameId === 'number' || typeof args.frameUrl === 'string';
+}
+
+function recordedFrameUnavailable(args: Record<string, unknown>, target: string): ToolResult {
+  return {
+    ok: false,
+    error: `Recorded iframe not available for ${target}: ${String(args.frameUrl ?? args.frameId ?? 'unknown frame')}`,
+  };
+}
+
+async function semanticClickAcrossFrames(tabId: number, args: Record<string, unknown>): Promise<ToolResult> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    world: 'MAIN',
+    func: (payload: Record<string, any>) => {
+      const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates : [];
+      const needles = [payload.label, payload.text, ...candidates.filter((candidate: any) => ['label', 'text', 'aria'].includes(candidate.type)).map((candidate: any) => candidate.value)]
+        .map((value: any) => normalize(compactRepeatedText(String(value ?? ''))))
+        .filter((value: string) => value.length > 0);
+      if (needles.length === 0) return { ok: false as const, error: 'No semantic click label available', frameUrl: location.href };
+
+      const elements = Array.from(document.querySelectorAll([
+        'button',
+        'a[href]',
+        'label',
+        '[role="button"]',
+        '[role="option"]',
+        '[role="radio"]',
+        '[role="checkbox"]',
+        '[aria-selected]',
+        '[aria-pressed]',
+        '[aria-checked]',
+        '[onclick]',
+        '[tabindex]',
+        '[class*="btn" i]',
+        '[class*="button" i]',
+        '[class*="tile" i]',
+        '[class*="card" i]',
+        '[class*="option" i]',
+        '[class*="slot" i]',
+        '[class*="service" i]',
+      ].join(','))).filter(isUsableClickTarget);
+
+      const ranked = elements
+        .map((el) => ({
+          el,
+          direct: normalize(compactRepeatedText([textFor(el), attrText(el)].filter(Boolean).join(' '))),
+          context: normalize(compactRepeatedText([labelFor(el), textFor(el), attrText(el)].filter(Boolean).join(' '))),
+        }))
+        .filter((item) => item.direct || item.context);
+
+      for (const needle of needles) {
+        const exact = ranked.filter((item) => item.direct === needle || item.context === needle)
+          .sort((a, b) => Number(b.direct === needle) - Number(a.direct === needle) || (a.direct || a.context).length - (b.direct || b.context).length)[0];
+        if (exact) return clickElement(exact.el, exact.direct || exact.context);
+      }
+      for (const needle of needles.filter((value: string) => value.length > 2)) {
+        const contains = ranked.filter((item) => item.direct.includes(needle) || item.context.includes(needle) || (item.direct && needle.includes(item.direct)))
+          .sort((a, b) => Number(b.direct.includes(needle)) - Number(a.direct.includes(needle)) || (a.direct || a.context).length - (b.direct || b.context).length)[0];
+        if (contains) return clickElement(contains.el, contains.direct || contains.context);
+      }
+      return { ok: false as const, error: `No visible semantic click target matched: ${needles.join(' | ')}`, frameUrl: location.href };
+
+      function clickElement(el: Element, matchedText: string) {
+        const target = el as HTMLElement;
+        target.scrollIntoView?.({ block: 'center', inline: 'center' });
+        const rect = target.getBoundingClientRect();
+        const clientX = Math.max(0, Math.round(rect.left + rect.width / 2));
+        const clientY = Math.max(0, Math.round(rect.top + rect.height / 2));
+        for (const eventName of ['pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
+          const EventCtor = eventName.startsWith('pointer') && typeof PointerEvent !== 'undefined' ? PointerEvent : MouseEvent;
+          target.dispatchEvent(new EventCtor(eventName, { bubbles: true, cancelable: true, clientX, clientY, button: 0 }));
+        }
+        target.click();
+        return { ok: true as const, matchedText, frameUrl: location.href };
+      }
+
+      function isUsableClickTarget(el: Element): boolean {
+        if (!(el instanceof HTMLElement)) return false;
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        if ((el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true') return false;
+        const style = getComputedStyle(el);
+        if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0) return false;
+        return true;
+      }
+
+      function labelFor(el: Element) {
+        const parts: string[] = [];
+        if (el.id) parts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() ?? '');
+        parts.push(el.closest('label')?.textContent?.trim() ?? '');
+        parts.push(el.getAttribute('aria-label') ?? '');
+        return parts.filter(Boolean).join(' ');
+      }
+
+      function textFor(el: Element) {
+        if (el instanceof HTMLInputElement && ['button', 'submit', 'reset'].includes(el.type)) return el.value;
+        return (el as HTMLElement).innerText ?? el.textContent ?? '';
+      }
+
+      function attrText(el: Element) {
+        return [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('name'), el.getAttribute('role')].filter(Boolean).join(' ');
+      }
+
+      function normalize(value: string) {
+        return value.replace(/\s+/g, ' ').trim().toLowerCase();
+      }
+
+      function compactRepeatedText(value: string): string {
+        const cleaned = value.replace(/\s+/g, ' ').trim();
+        if (cleaned.length < 4 || cleaned.length % 2 !== 0) return cleaned;
+        const half = cleaned.length / 2;
+        const left = cleaned.slice(0, half).trim();
+        const right = cleaned.slice(half).trim();
+        return left && left.toLowerCase() === right.toLowerCase() ? left : cleaned;
+      }
+    },
+    args: [args],
+  });
+
+  const match = results.find((result) => (result.result as any)?.ok);
+  if (match?.result) return { ok: true, data: { clicked: 'semantic', ...(match.result as any) } };
+  const errors = results.map((result) => (result.result as any)?.error).filter(Boolean).slice(0, 3);
+  return { ok: false, error: errors.join('; ') || 'No semantic click target matched in any frame' };
+}
+
 /**
  * Execute a function inside the page context targeting a specific iframe.
  * Uses chrome.scripting.executeScript to run in the tab's main world, then
@@ -2838,20 +3106,87 @@ async function resolveRecordedFrameId(tabId: number, args: Record<string, unknow
   const frameUrl = typeof args.frameUrl === 'string' ? args.frameUrl : null;
   if (explicitFrameId === null && !frameUrl) return null;
 
-  const frames = await chrome.webNavigation.getAllFrames({ tabId });
-  if (!frames) return explicitFrameId;
+  const recorded = frameUrl ? parseFrameUrl(frameUrl) : null;
+  const deadline = Date.now() + (recorded ? 20_000 : 0);
+  while (true) {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+    if (frames) {
+      const frameId = resolveRecordedFrameFromList(frames, explicitFrameId, recorded);
+      if (frameId !== null) return frameId;
+    }
 
-  if (explicitFrameId !== null && frames.some((f) => f.frameId === explicitFrameId)) {
+    if (!recorded || Date.now() >= deadline) return null;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
+
+function resolveRecordedFrameFromList(
+  frames: chrome.webNavigation.GetAllFrameResultDetails[],
+  explicitFrameId: number | null,
+  recorded: { normalized: string; origin: string; host: string } | null
+): number | null {
+  const explicitFrame = explicitFrameId !== null ? frames.find((f) => f.frameId === explicitFrameId) : undefined;
+  if (explicitFrame && !recorded) {
     return explicitFrameId;
   }
 
-  if (!frameUrl) return explicitFrameId;
-  const normalized = frameUrl.split('#')[0];
-  const match = frames.find((f) => {
-    const candidate = f.url.split('#')[0];
-    return candidate === normalized || candidate.startsWith(normalized) || normalized.startsWith(candidate);
+  if (explicitFrame && recorded && frameMatchesRecordedUrl(explicitFrame.url, recorded)) {
+    return explicitFrame.frameId;
+  }
+
+  if (!recorded) return null;
+  const exactMatch = frames.find((frame) => normalizeFrameUrl(frame.url) === recorded.normalized);
+  if (exactMatch) return exactMatch.frameId;
+
+  const prefixMatch = frames.find((frame) => {
+    const candidate = normalizeFrameUrl(frame.url);
+    return candidate.startsWith(recorded.normalized) || recorded.normalized.startsWith(candidate);
   });
-  return match?.frameId ?? explicitFrameId;
+  if (prefixMatch) return prefixMatch.frameId;
+
+  const sameOrigin = frames.filter((frame) => {
+    const candidate = parseFrameUrl(frame.url);
+    return candidate && candidate.origin === recorded.origin;
+  });
+  if (sameOrigin.length === 1) return sameOrigin[0].frameId;
+
+  const sameHost = frames.filter((frame) => {
+    const candidate = parseFrameUrl(frame.url);
+    return candidate && candidate.host === recorded.host;
+  });
+  if (sameHost.length === 1) return sameHost[0].frameId;
+
+  return null;
+}
+
+function frameMatchesRecordedUrl(
+  currentUrl: string,
+  recorded: { normalized: string; origin: string; host: string }
+): boolean {
+  const current = parseFrameUrl(currentUrl);
+  if (!current) return false;
+  return current.normalized === recorded.normalized
+    || current.normalized.startsWith(recorded.normalized)
+    || recorded.normalized.startsWith(current.normalized)
+    || current.origin === recorded.origin
+    || current.host === recorded.host;
+}
+
+function normalizeFrameUrl(value: string): string {
+  return value.split('#')[0].replace(/\/$/, '');
+}
+
+function parseFrameUrl(value: string): { normalized: string; origin: string; host: string } | null {
+  try {
+    const url = new URL(value);
+    return {
+      normalized: normalizeFrameUrl(url.href),
+      origin: url.origin,
+      host: url.host,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function execInFrameId(

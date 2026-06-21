@@ -159,6 +159,7 @@ export interface ReplayDebug {
   url?: string;
   title?: string;
   pageTextSnippet?: string;
+  frameUrls?: string[];
   screenshotKey?: string;
   screenshotCaptured?: boolean;
 }
@@ -221,7 +222,7 @@ export async function replayFlow(
 
     for (let si = 0; ok && si < stepsToRun.length; si++) {
       const step: FlowStep = stepsToRun[si];
-      const args = argsForStep(flow, step, si, testData, dataMode, effectiveStrategies);
+      const args = inferReplaySemantics(step, argsForStep(flow, step, si, testData, dataMode, effectiveStrategies));
 
       onProgress({ type: 'step', runIndex: run, total: repeatCount, stepIndex: si, stepTool: step.tool });
 
@@ -267,11 +268,29 @@ export async function replayFlow(
         failedStep = si;
         failedTool = step.tool;
         error = res.error;
+        onProgress({
+          type: 'step_failed',
+          runIndex: run,
+          total: repeatCount,
+          stepIndex: si,
+          stepTool: step.tool,
+          error: res.error,
+          url: await currentTabUrl(tabId),
+        } as any);
         debug = await captureReplayDebug(tabId);
         break;
       }
 
       await waitAfterReplayStep(tabId, step, args, getNetworkActivity);
+      onProgress({
+        type: 'step_done',
+        runIndex: run,
+        total: repeatCount,
+        stepIndex: si,
+        stepTool: step.tool,
+        data: res.data,
+        url: await currentTabUrl(tabId),
+      } as any);
       if (isStatefulStep(step, args)) upsertPendingState(pendingScreenState, { step, args, stepIndex: si });
       if (isProceedStep(step, args)) {
         lastProceed = { step, args, stepIndex: si };
@@ -375,6 +394,14 @@ async function executeToolWithTimeout(
   return result;
 }
 
+async function currentTabUrl(tabId: number): Promise<string | undefined> {
+  try {
+    return (await chrome.tabs.get(tabId)).url;
+  } catch {
+    return undefined;
+  }
+}
+
 function isMissingReplayTargetError(error?: string): boolean {
   return /\b(?:element|input|select)\s+not\s+found\b/i.test(String(error ?? ''));
 }
@@ -413,6 +440,30 @@ function semanticProceedFallbacks(
         { type: 'role', value: 'button' },
       ],
     }));
+}
+
+function inferReplaySemantics(step: FlowStep, args: Record<string, unknown>): Record<string, unknown> {
+  if (step.tool !== 'click') return args;
+  if (searchableText(args, step)) return args;
+  const selector = String(args.selector ?? '');
+  if (!/\bfooter\b/i.test(selector) || !/\bbutton\b/i.test(selector)) return args;
+  const candidates = Array.isArray(args.locatorCandidates) ? args.locatorCandidates as Array<Record<string, unknown>> : [];
+  return {
+    ...args,
+    label: 'Continue',
+    text: 'Continue',
+    locatorCandidates: [
+      ...candidates,
+      { type: 'text', value: 'Continue' },
+      { type: 'aria', value: 'Continue' },
+      { type: 'text', value: 'Next' },
+      { type: 'aria', value: 'Next' },
+      { type: 'text', value: 'Save' },
+      { type: 'aria', value: 'Save' },
+      { type: 'text', value: 'Done' },
+      { type: 'aria', value: 'Done' },
+    ],
+  };
 }
 
 function upsertPendingState(
@@ -662,6 +713,8 @@ async function captureReplayDebug(tabId: number): Promise<ReplayDebug> {
     const tab = await chrome.tabs.get(tabId);
     debug.url = tab.url;
     debug.title = tab.title;
+    const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+    debug.frameUrls = frames?.map((frame) => frame.url).slice(0, 20);
     const textResult = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => document.body?.innerText?.replace(/\s+/g, ' ').trim().slice(0, 2000) ?? '',

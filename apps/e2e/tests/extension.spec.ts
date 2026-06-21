@@ -68,18 +68,24 @@ async function replayFlow(
 ): Promise<any[]> {
   return extensionPage.evaluate(
     ({ tabId: targetTabId, flow: targetFlow, repeatCount: runs, dataMode: mode, fieldStrategies: strategies }) => new Promise<any[]>((resolve, reject) => {
-      const timeoutMs = Math.max(30_000, runs * (targetFlow.steps.length * 1_000 + 3_000));
+      const events: any[] = [];
+      const timeoutMs = Math.max(120_000, runs * (targetFlow.steps.length * 5_000 + 30_000));
       const timer = setTimeout(() => {
         chrome.runtime.onMessage.removeListener(listener);
-        reject(new Error('Timed out waiting for replay completion'));
+        reject(new Error(`Timed out waiting for replay completion. Last events: ${JSON.stringify(events.slice(-12))}`));
       }, timeoutMs);
 
       const listener = (msg: any) => {
         if (msg.type !== 'FLOW_REPLAY_EVENT') return;
+        const event = { ...msg.payload };
+        if (event.results) event.results = `[${event.results.length} result(s)]`;
+        events.push(event);
         if (msg.payload?.type === 'all_done') {
           clearTimeout(timer);
           chrome.runtime.onMessage.removeListener(listener);
-          resolve(msg.payload.results ?? []);
+          const results = msg.payload.results ?? [];
+          for (const result of results) result.events = events;
+          resolve(results);
         }
       };
 
@@ -1799,6 +1805,102 @@ test('live Avis Ford scheduler records through contact screen without booking', 
   expect(steps.length).toBeGreaterThan(8);
   expect(steps.some((s: any) => s.args?.frameUrl?.includes('guestxpui.ford.com'))).toBe(true);
   await expect(frame.getByText('Continue', { exact: true })).toBeVisible();
+
+  await extensionPage.close();
+  await target.close();
+});
+
+test('live Avis Ford scheduler records and replays same data without booking', async ({
+  context,
+  extensionId,
+}) => {
+  test.skip(
+    process.env.HAWKEYE_LIVE_AVISFORD !== '1',
+    'Set HAWKEYE_LIVE_AVISFORD=1 to run the guarded live Avis Ford replay test.'
+  );
+  test.setTimeout(180_000);
+
+  const target = await context.newPage();
+  await target.goto('https://www.avisford.com/service-appointment.aspx', {
+    waitUntil: 'domcontentloaded',
+    timeout: 60_000,
+  });
+  await target.waitForTimeout(5_000);
+
+  const allowCookies = target.getByText('Allow all cookies', { exact: true });
+  if (await allowCookies.count()) {
+    await allowCookies.click().catch(() => {});
+    await target.waitForTimeout(2_000);
+  }
+
+  const extensionPage = await context.newPage();
+  await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+  const tabId = await getTabId(extensionPage, 'https://www.avisford.com/service-appointment.aspx');
+
+  const scheduler = () => {
+    const frame = target.frames().find((f) => f.url().includes('guestxpui.ford.com'));
+    if (!frame) throw new Error('Avis Ford scheduler iframe not found');
+    return frame;
+  };
+
+  await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+  const frame = scheduler();
+
+  await frame.getByText('New Customer', { exact: true }).click();
+  await target.waitForTimeout(1_500);
+
+  await frame.locator('#year-input').selectOption({ label: '2025' });
+  await target.waitForTimeout(1_000);
+  await frame.locator('#model-input').selectOption('F150');
+  await frame.locator('#vehicle-type-input').selectOption('Gas');
+  await frame.locator('#mileage-input').fill('12000');
+  await frame.getByText('Continue', { exact: true }).click();
+  await target.waitForTimeout(2_500);
+
+  await frame.locator('.service-tile__label', { hasText: 'Oil Change' }).first().click();
+  await target.waitForTimeout(800);
+  await frame.getByText('Continue', { exact: true }).click();
+  await target.waitForTimeout(2_500);
+
+  await frame.getByText('Continue', { exact: true }).click();
+  await target.waitForTimeout(1_500);
+  await frame.locator('#Drop\\ Off').check().catch(async () => {
+    await frame.getByText("I'll drop the vehicle off", { exact: true }).click();
+  });
+  await frame.locator('.gxp-modal button').filter({ hasText: 'Continue' }).first().click();
+  await target.waitForTimeout(5_000);
+
+  await frame.locator('input[type=radio][id*="T"]').first().check();
+  await target.waitForTimeout(800);
+  await frame.getByText('Continue', { exact: true }).click();
+  await expect(frame.getByText('Enter Your Information', { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  await frame.locator('#first-name-input').fill('Sam');
+  await frame.locator('#last-name-input').fill('Replay');
+
+  const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+  const steps = stopped.steps ?? [];
+  expect(steps.length).toBeGreaterThan(12);
+  expect(steps.some((s: any) => s.tool === 'type_text' && s.meta?.label?.toLowerCase().includes('first'))).toBe(true);
+
+  const flow = {
+    id: 'live_avis_record_replay',
+    name: 'Live Avis record replay',
+    domain: 'www.avisford.com',
+    startUrl: stopped.startUrl ?? 'https://www.avisford.com/service-appointment.aspx',
+    startTitle: stopped.startTitle ?? '',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    version: 1,
+    steps,
+    stepCount: steps.length,
+    fields: [],
+    replayDefaults: { repeatCount: 1, dataMode: 'same', fieldStrategies: {} },
+  };
+
+  const results = await replayFlow(extensionPage, tabId, flow, 1, 'same', {});
+  expect(results).toHaveLength(1);
+  expect(results[0].ok, JSON.stringify(results[0], null, 2)).toBe(true);
 
   await extensionPage.close();
   await target.close();

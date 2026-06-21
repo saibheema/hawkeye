@@ -76,9 +76,11 @@ export function initInteractionRecorder() {
 
 function recordClick(event: MouseEvent) {
   if (!recording || !event.isTrusted) return;
-  const el = closestActionable(event.target);
+  const actionable = closestActionable(event.target);
+  const el = labelChoiceControl(actionable) ?? actionable;
   if (!el || shouldSkipClick(el)) return;
   const clickStep: RecordedStep = { tool: 'click', args: locatorArgs(el, clickStateArgs(el)), meta: { source: 'manual', label: labelFor(el) } };
+  if (isDuplicateFieldStep(clickStep)) return;
   if (isSubmitControl(el)) {
     const form = (el as HTMLButtonElement | HTMLInputElement).form ?? el.closest('form');
     const formSteps = form ? getFormStateSteps(form) : [];
@@ -236,6 +238,7 @@ function closestActionable(target: EventTarget | null): Element | null {
   const semantic = target.closest([
     'button',
     'a[href]',
+    'label',
     '[role="button"]',
     '[role="link"]',
     '[role="menuitem"]',
@@ -261,6 +264,14 @@ function closestActionable(target: EventTarget | null): Element | null {
     current = current.parentElement;
   }
   return null;
+}
+
+function labelChoiceControl(el: Element | null): HTMLInputElement | null {
+  if (!(el instanceof HTMLLabelElement)) return null;
+  const control = el.control ?? (el.htmlFor ? document.getElementById(el.htmlFor) : null);
+  if (control instanceof HTMLInputElement && ['radio', 'checkbox'].includes(control.type)) return control;
+  const nested = el.querySelector('input[type="radio"],input[type="checkbox"]');
+  return nested instanceof HTMLInputElement ? nested : null;
 }
 
 function isLikelyClickableWidget(el: Element): boolean {
@@ -386,6 +397,8 @@ function locatorArgs(el: Element, extra: Record<string, unknown> = {}): Record<s
 function clickStateArgs(el: Element): Record<string, unknown> {
   const label = labelFor(el);
   const input = el instanceof HTMLInputElement ? el : null;
+  const labelledControl = el instanceof HTMLLabelElement && el.htmlFor ? document.getElementById(el.htmlFor) : null;
+  const choiceInput = input ?? (labelledControl instanceof HTMLInputElement ? labelledControl : null);
   const role = el.getAttribute('role') ?? '';
   const args: Record<string, unknown> = {
     label,
@@ -394,10 +407,14 @@ function clickStateArgs(el: Element): Record<string, unknown> {
     role,
     clickKind: isSelectableWidget(el) ? 'selectable' : 'click',
   };
-  if (input && ['radio', 'checkbox'].includes(input.type)) {
-    args.inputType = input.type;
-    args.value = input.value;
-    args.checked = input.checked;
+  if (el instanceof HTMLLabelElement && el.htmlFor) {
+    args.forId = el.htmlFor;
+  }
+  if (choiceInput && ['radio', 'checkbox'].includes(choiceInput.type)) {
+    args.inputType = choiceInput.type;
+    args.value = choiceInput.value;
+    args.checked = choiceInput.checked;
+    args.clickKind = 'selectable';
   }
   return args;
 }
@@ -405,7 +422,7 @@ function clickStateArgs(el: Element): Record<string, unknown> {
 function visibleClickText(el: Element): string {
   const input = el as HTMLInputElement;
   if (input instanceof HTMLInputElement && ['button', 'submit', 'reset'].includes(input.type)) return input.value.trim();
-  return el.textContent?.replace(/\s+/g, ' ').trim().slice(0, 160) ?? '';
+  return compactRepeatedText((el.textContent?.replace(/\s+/g, ' ').trim() || labelFor(el)) ?? '').slice(0, 160);
 }
 
 function isSelectableWidget(el: Element): boolean {
@@ -509,20 +526,44 @@ async function flushStepsThenSubmit(
 
 function labelFor(el: Element): string {
   const explicit = el.getAttribute('aria-label') || el.getAttribute('placeholder') || '';
-  if (explicit) return explicit;
+  if (explicit) return compactRepeatedText(explicit);
 
   if (el.id) {
     const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-    if (label?.textContent?.trim()) return label.textContent.trim();
+    if (label?.textContent?.trim()) return compactRepeatedText(label.textContent.trim());
   }
 
   const wrappedLabel = el.closest('label')?.textContent?.trim();
-  if (wrappedLabel) return wrappedLabel;
+  if (wrappedLabel) return compactRepeatedText(wrappedLabel);
 
   const name = (el as HTMLInputElement).name;
-  if (name) return name;
+  if (name) return compactRepeatedText(name);
 
-  return el.textContent?.trim().slice(0, 80) ?? '';
+  const nearby = [
+    (el as HTMLElement).innerText,
+    (el.parentElement as HTMLElement | null)?.innerText,
+    (el.closest('[class*="tile" i],[class*="card" i],[class*="option" i],[role="button"],[role="option"]') as HTMLElement | null)?.innerText,
+  ].map((value) => value?.replace(/\s+/g, ' ').trim()).find(Boolean);
+  if (nearby) return compactRepeatedText(nearby).slice(0, 120);
+
+  if (el instanceof HTMLLabelElement && el.htmlFor) {
+    return compactRepeatedText(humanizeLocatorText(el.htmlFor)).slice(0, 120);
+  }
+
+  return compactRepeatedText(el.textContent?.trim() ?? '').slice(0, 80);
+}
+
+function compactRepeatedText(value: string): string {
+  const cleaned = value.replace(/\s+/g, ' ').trim();
+  if (cleaned.length < 4 || cleaned.length % 2 !== 0) return cleaned;
+  const half = cleaned.length / 2;
+  const left = cleaned.slice(0, half).trim();
+  const right = cleaned.slice(half).trim();
+  return left && left.toLowerCase() === right.toLowerCase() ? left : cleaned;
+}
+
+function humanizeLocatorText(value: string): string {
+  return value.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function inferDataKind(el: HTMLInputElement | HTMLTextAreaElement, label: string): DataKind {

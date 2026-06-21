@@ -107,6 +107,10 @@ export function getSelector(el: Element): string {
   const testId = el.getAttribute('data-testid');
   if (testId) return `[data-testid="${cssString(testId)}"]`;
 
+  if (el instanceof HTMLLabelElement && el.htmlFor) {
+    return `label[for="${cssString(el.htmlFor)}"]`;
+  }
+
   const ariaLabel = el.getAttribute('aria-label');
   if (ariaLabel) return `${el.tagName.toLowerCase()}[aria-label="${cssString(ariaLabel)}"]`;
 
@@ -161,6 +165,11 @@ export function getLocatorCandidates(el: Element): LocatorCandidate[] {
   add({ type: 'css', value: primary, selector: primary, score: 100, tagName, inputType });
   if (el.id) add({ type: 'css', value: `#${CSS.escape(el.id)}`, selector: `#${CSS.escape(el.id)}`, score: 95, tagName, inputType });
 
+  if (el instanceof HTMLLabelElement && el.htmlFor) {
+    add({ type: 'css', value: `label[for="${cssString(el.htmlFor)}"]`, selector: `label[for="${cssString(el.htmlFor)}"]`, score: 96, tagName, inputType });
+    add({ type: 'label', value: humanizeLocatorText(el.htmlFor), score: 86, tagName, inputType });
+  }
+
   const testId = el.getAttribute('data-testid');
   if (testId) add({ type: 'css', value: `[data-testid="${cssString(testId)}"]`, selector: `[data-testid="${cssString(testId)}"]`, score: 94, tagName, inputType });
 
@@ -212,6 +221,8 @@ function labelForElement(el: Element): string {
   const wrappedLabel = el.closest('label')?.textContent?.trim();
   if (wrappedLabel) return wrappedLabel;
 
+  if (el instanceof HTMLLabelElement && el.htmlFor) return humanizeLocatorText(el.htmlFor);
+
   return '';
 }
 
@@ -224,4 +235,8 @@ function visibleText(el: Element): string {
 
 function cssString(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\A ');
+}
+
+function humanizeLocatorText(value: string): string {
+  return value.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
 }

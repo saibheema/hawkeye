@@ -86,12 +86,7 @@ export function recordStep(
   if (!state) return;
   const steps = state.steps;
   const last = steps[steps.length - 1];
-  if (
-    tool === 'type_text'
-    && last?.tool === 'type_text'
-    && last.args.selector === args.selector
-    && last.args.frameId === args.frameId
-  ) {
+  if (last && shouldCoalesceRecordedStep(last, tool, args)) {
     steps[steps.length - 1] = { tool, args, meta };
     void persistRecording(tabId);
     return;
@@ -99,6 +94,31 @@ export function recordStep(
   if (steps.length >= MAX_FLOW_STEPS) return;
   steps.push({ tool, args, meta });
   void persistRecording(tabId);
+}
+
+function shouldCoalesceRecordedStep(
+  last: FlowStep,
+  tool: string,
+  args: Record<string, unknown>
+): boolean {
+  if (tool === 'type_text') {
+    return last.tool === 'type_text'
+      && last.args.selector === args.selector
+      && last.args.frameId === args.frameId;
+  }
+
+  if (tool === 'click' && last.tool === 'click' && isChoiceArgs(last.args) && isChoiceArgs(args)) {
+    return last.args.selector === args.selector
+      && last.args.frameId === args.frameId
+      && String(last.args.value ?? '') === String(args.value ?? '');
+  }
+
+  return false;
+}
+
+function isChoiceArgs(args: Record<string, unknown>): boolean {
+  const inputType = String(args.inputType ?? '').toLowerCase();
+  return inputType === 'radio' || inputType === 'checkbox';
 }
 
 export function getRecordingSteps(tabId: number): FlowStep[] {
