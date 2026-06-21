@@ -8,10 +8,17 @@ import type { CapturedRequest } from '@hawkeye/types';
 // Maximum captured entries per tab before rolling over
 const MAX_PER_TAB = 200;
 
+export type NetworkActivity = {
+  active: number;
+  lastActivityAt: number;
+};
+
 export function startNetworkWatcher(
-  networkData: Map<number, CapturedRequest[]>
+  networkData: Map<number, CapturedRequest[]>,
+  activityByTab?: Map<number, NetworkActivity>
 ) {
   const pendingRequests = new Map<string, Partial<CapturedRequest>>();
+  const requestTabs = new Map<string, number>();
 
   // Capture outgoing requests
   chrome.webRequest.onBeforeRequest.addListener(
@@ -28,6 +35,8 @@ export function startNetworkWatcher(
         requestBody: extractBody(details.requestBody ?? undefined),
       };
       pendingRequests.set(details.requestId, entry);
+      requestTabs.set(details.requestId, details.tabId);
+      markNetworkStart(activityByTab, details.tabId);
     },
     { urls: ['<all_urls>'] },
     ['requestBody']
@@ -71,9 +80,24 @@ export function startNetworkWatcher(
     ['responseHeaders']
   );
 
+  chrome.webRequest.onCompleted.addListener(
+    (details) => {
+      const tabId = requestTabs.get(details.requestId) ?? (details.tabId >= 0 ? details.tabId : undefined);
+      if (typeof tabId === 'number') markNetworkDone(activityByTab, tabId);
+      requestTabs.delete(details.requestId);
+      pendingRequests.delete(details.requestId);
+    },
+    { urls: ['<all_urls>'] }
+  );
+
   // Cleanup abandoned requests
   chrome.webRequest.onErrorOccurred.addListener(
-    (details) => pendingRequests.delete(details.requestId),
+    (details) => {
+      const tabId = requestTabs.get(details.requestId) ?? (details.tabId >= 0 ? details.tabId : undefined);
+      if (typeof tabId === 'number') markNetworkDone(activityByTab, tabId);
+      requestTabs.delete(details.requestId);
+      pendingRequests.delete(details.requestId);
+    },
     { urls: ['<all_urls>'] }
   );
 }
@@ -88,6 +112,18 @@ function isTrackable(url: string): boolean {
   const staticExts = new Set(['png','jpg','jpeg','gif','svg','webp','ico','css','woff','woff2','ttf','eot']);
   if (ext && staticExts.has(ext)) return false;
   return true;
+}
+
+function markNetworkStart(activityByTab: Map<number, NetworkActivity> | undefined, tabId: number) {
+  if (!activityByTab) return;
+  const current = activityByTab.get(tabId) ?? { active: 0, lastActivityAt: 0 };
+  activityByTab.set(tabId, { active: current.active + 1, lastActivityAt: Date.now() });
+}
+
+function markNetworkDone(activityByTab: Map<number, NetworkActivity> | undefined, tabId: number) {
+  if (!activityByTab) return;
+  const current = activityByTab.get(tabId) ?? { active: 0, lastActivityAt: 0 };
+  activityByTab.set(tabId, { active: Math.max(0, current.active - 1), lastActivityAt: Date.now() });
 }
 
 function headersToObj(

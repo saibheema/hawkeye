@@ -5,6 +5,11 @@
 import { executeTool } from './tools.js';
 import { MAX_FLOW_STEPS, type Flow, type FlowFieldStrategy, type FlowStep } from './flow-recorder.js';
 
+type NetworkActivitySnapshot = {
+  active: number;
+  lastActivityAt: number;
+};
+
 // ─── Test data generator ──────────────────────────────────────────────────────
 
 const FIRST_NAMES = ['Alex', 'Jordan', 'Morgan', 'Taylor', 'Casey', 'Riley', 'Drew', 'Quinn', 'Avery', 'Blake'];
@@ -162,7 +167,8 @@ export async function replayFlow(
   repeatCount: number,
   dataMode: 'same' | 'random',
   onProgress: ReplayProgressFn,
-  fieldStrategies?: Record<string, FlowFieldStrategy>
+  fieldStrategies?: Record<string, FlowFieldStrategy>,
+  getNetworkActivity?: () => NetworkActivitySnapshot | undefined
 ): Promise<RunResult[]> {
   const results: RunResult[] = [];
   const effectiveStrategies = fieldStrategies ?? flow.replayDefaults?.fieldStrategies;
@@ -190,7 +196,7 @@ export async function replayFlow(
         error = `Could not navigate to recorded start URL: ${nav.error}`;
         debug = await captureReplayDebug(tabId);
       } else {
-        await waitForReplaySettle(tabId, 1500);
+        await waitForReplaySettle(tabId, 1500, getNetworkActivity);
       }
     }
 
@@ -200,6 +206,7 @@ export async function replayFlow(
 
       onProgress({ type: 'step', runIndex: run, total: repeatCount, stepIndex: si, stepTool: step.tool });
 
+      await waitBeforeReplayStep(tabId, step, getNetworkActivity);
       const res = await executeTool(step.tool, args, tabId);
       if (!res.ok) {
         ok = false;
@@ -210,7 +217,7 @@ export async function replayFlow(
         break;
       }
 
-      await waitAfterReplayStep(tabId, step);
+      await waitAfterReplayStep(tabId, step, getNetworkActivity);
     }
 
     const result: RunResult = {
@@ -247,19 +254,41 @@ function startUrlForFlow(flow: Flow): string | null {
   return null;
 }
 
-async function waitAfterReplayStep(tabId: number, step: FlowStep): Promise<void> {
+async function waitBeforeReplayStep(
+  tabId: number,
+  step: FlowStep,
+  getNetworkActivity?: () => NetworkActivitySnapshot | undefined
+): Promise<void> {
   if (['click', 'select_option', 'trigger_event'].includes(step.tool)) {
-    await waitForReplaySettle(tabId, 1200);
+    await waitForReplaySettle(tabId, 800, getNetworkActivity);
     return;
   }
-  await waitForReplaySettle(tabId, 450);
+  await waitForReplaySettle(tabId, 250, getNetworkActivity);
 }
 
-async function waitForReplaySettle(tabId: number, minimumMs: number): Promise<void> {
+async function waitAfterReplayStep(
+  tabId: number,
+  step: FlowStep,
+  getNetworkActivity?: () => NetworkActivitySnapshot | undefined
+): Promise<void> {
+  if (['click', 'select_option', 'trigger_event'].includes(step.tool)) {
+    await waitForReplaySettle(tabId, 1400, getNetworkActivity);
+    return;
+  }
+  await waitForReplaySettle(tabId, 450, getNetworkActivity);
+}
+
+async function waitForReplaySettle(
+  tabId: number,
+  minimumMs: number,
+  getNetworkActivity?: () => NetworkActivitySnapshot | undefined
+): Promise<void> {
   const started = Date.now();
   await waitForTabAndFramesReady(tabId, Math.max(2500, minimumMs));
   const remaining = minimumMs - (Date.now() - started);
   if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+  await waitForNetworkIdle(getNetworkActivity, 800, 3_500);
+  await waitForDomQuiet(tabId, 450, 1_500);
 }
 
 async function waitForTabAndFramesReady(tabId: number, timeoutMs: number): Promise<void> {
@@ -277,6 +306,57 @@ async function waitForTabAndFramesReady(tabId: number, timeoutMs: number): Promi
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
+
+async function waitForNetworkIdle(
+  getNetworkActivity: (() => NetworkActivitySnapshot | undefined) | undefined,
+  quietMs: number,
+  timeoutMs: number
+): Promise<void> {
+  if (!getNetworkActivity) return;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const activity = getNetworkActivity();
+    const active = activity?.active ?? 0;
+    const lastActivityAt = activity?.lastActivityAt ?? 0;
+    if (active === 0 && Date.now() - lastActivityAt >= quietMs) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
+
+async function waitForDomQuiet(tabId: number, quietMs: number, timeoutMs: number): Promise<void> {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: (quietWindowMs: number, maxWaitMs: number) => new Promise<boolean>((resolve) => {
+        const root = document.documentElement;
+        if (!root) {
+          resolve(true);
+          return;
+        }
+        let lastMutationAt = Date.now();
+        const startedAt = Date.now();
+        const observer = new MutationObserver(() => { lastMutationAt = Date.now(); });
+        observer.observe(root, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          characterData: true,
+        });
+        const timer = window.setInterval(() => {
+          const now = Date.now();
+          if (now - lastMutationAt >= quietWindowMs || now - startedAt >= maxWaitMs) {
+            window.clearInterval(timer);
+            observer.disconnect();
+            resolve(true);
+          }
+        }, 100);
+      }),
+      args: [quietMs, timeoutMs],
+    });
+  } catch {
+    // Restricted pages or detached frames should not block replay.
   }
 }
 

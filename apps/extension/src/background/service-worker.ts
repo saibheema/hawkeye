@@ -4,7 +4,7 @@
  */
 
 import type { ExtensionMessage, AgentState } from '@hawkeye/types';
-import { startNetworkWatcher } from './network-watcher.js';
+import { startNetworkWatcher, type NetworkActivity } from './network-watcher.js';
 import { runAgent } from './agent.js';
 import {
   startRecording, stopRecording, isRecording, recordStep, getRecordingSteps, getRecordingState, ensureRecordingState,
@@ -19,6 +19,7 @@ const agentStates = new Map<number, AgentState>();
 
 // Track network captured data per tab
 const networkData = new Map<number, any[]>();
+const networkActivity = new Map<number, NetworkActivity>();
 
 // ---------- Lifecycle ----------
 
@@ -31,11 +32,12 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   agentStates.delete(tabId);
   networkData.delete(tabId);
+  networkActivity.delete(tabId);
 });
 
 // ---------- Network Watcher ----------
 
-startNetworkWatcher(networkData);
+startNetworkWatcher(networkData, networkActivity);
 
 // ---------- Message Router ----------
 
@@ -295,7 +297,7 @@ async function handleMessage(
         sendResponse({ ok: true, started: true });
         replayFlow(flow, tabId, repeatCount, dataMode ?? 'same', (event) => {
           chrome.runtime.sendMessage({ type: 'FLOW_REPLAY_EVENT', payload: event }).catch(() => {});
-        }, fieldStrategies).catch((err) => {
+        }, fieldStrategies, () => networkActivity.get(tabId)).catch((err) => {
           chrome.runtime.sendMessage({ type: 'FLOW_REPLAY_EVENT', payload: { type: 'all_done', error: err.message } }).catch(() => {});
         });
         break;

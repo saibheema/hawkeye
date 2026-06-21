@@ -441,10 +441,11 @@ async function flushStepsThenSubmit(
   submitter?: HTMLButtonElement | HTMLInputElement
 ) {
   await sendStepsAck(steps);
+  if (!form.isConnected) return;
   resumingSubmissions.add(form);
   window.setTimeout(() => resumingSubmissions.delete(form), 1500);
   if (typeof form.requestSubmit === 'function') {
-    form.requestSubmit(submitter);
+    form.requestSubmit(submitter?.isConnected ? submitter : undefined);
   } else {
     form.submit();
   }

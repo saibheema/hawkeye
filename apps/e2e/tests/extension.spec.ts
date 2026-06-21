@@ -823,6 +823,61 @@ test('replays recorded actions inside an iframe', async ({ context, extensionId 
   });
 });
 
+test('replay submit event does not submit a detached form', async ({ context, extensionId }) => {
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <form id="dynamicForm">
+          <input id="query" name="query" value="hello">
+          <button type="submit">Continue</button>
+        </form>
+        <script>
+          document.getElementById('dynamicForm').addEventListener('submit', (event) => {
+            event.preventDefault();
+            event.currentTarget.remove();
+            document.body.insertAdjacentHTML('beforeend', '<p id="done">Submitted</p>');
+          });
+        </script>
+      </body>
+    </html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    const warnings: string[] = [];
+    target.on('console', (msg) => {
+      const text = msg.text();
+      if (text.includes('Form submission canceled because the form is not connected')) warnings.push(text);
+    });
+    await target.goto(baseUrl);
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    const flow = {
+      id: 'detached-submit-flow',
+      name: 'Detached Submit',
+      domain: new URL(baseUrl).hostname,
+      startUrl: baseUrl,
+      version: 1,
+      stepCount: 1,
+      fields: [],
+      replayDefaults: { repeatCount: 1, dataMode: 'same', fieldStrategies: {} },
+      steps: [
+        { tool: 'trigger_event', args: { selector: '#dynamicForm', event: 'submit' }, meta: { source: 'test' } },
+      ],
+    };
+
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results[0].ok).toBe(true);
+    await expect(target.locator('#done')).toHaveText('Submitted');
+    expect(warnings).toEqual([]);
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('applies DOM modification tools inside an iframe', async ({ context, extensionId }) => {
   const frameHtml = `<!doctype html>
     <html>

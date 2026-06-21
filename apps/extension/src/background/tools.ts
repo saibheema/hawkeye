@@ -1272,8 +1272,10 @@ export async function executeTool(
               && !!(el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).form;
             if ((o.event === 'submit' && el instanceof HTMLFormElement && !evt.defaultPrevented) || (isEnterSubmit && !evt.defaultPrevented)) {
               const form = el instanceof HTMLFormElement ? el : (el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).form;
-              if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
-              else form?.submit();
+              if (form?.isConnected) {
+                if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                else form.submit();
+              }
             }
             if (o.event === 'focus') el.focus?.();
             if (o.event === 'blur')  el.blur?.();
