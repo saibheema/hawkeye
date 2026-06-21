@@ -547,6 +547,10 @@ export async function executeTool(
                 parts.push(el.closest('label')?.textContent?.trim() ?? '');
                 parts.push(el.getAttribute('aria-label') ?? '');
                 parts.push((el as HTMLInputElement).placeholder ?? '');
+                parts.push((el.nextElementSibling as HTMLElement | null)?.innerText?.trim() ?? '');
+                parts.push((el.previousElementSibling as HTMLElement | null)?.innerText?.trim() ?? '');
+                parts.push((el.parentElement as HTMLElement | null)?.innerText?.trim() ?? '');
+                parts.push((el.closest('[role="radio"],[role="checkbox"],[role="option"],[role="button"],li,fieldset,div') as HTMLElement | null)?.innerText?.trim() ?? '');
                 return parts.filter(Boolean).join(' ');
               }
               function textFor(el: Element) {
@@ -741,6 +745,10 @@ export async function executeTool(
                 parts.push(el.closest('label')?.textContent?.trim() ?? '');
                 parts.push(el.getAttribute('aria-label') ?? '');
                 parts.push((el as HTMLInputElement).placeholder ?? '');
+                parts.push((el.nextElementSibling as HTMLElement | null)?.innerText?.trim() ?? '');
+                parts.push((el.previousElementSibling as HTMLElement | null)?.innerText?.trim() ?? '');
+                parts.push((el.parentElement as HTMLElement | null)?.innerText?.trim() ?? '');
+                parts.push((el.closest('[role="radio"],[role="checkbox"],[role="option"],[role="button"],li,fieldset,div') as HTMLElement | null)?.innerText?.trim() ?? '');
                 return parts.filter(Boolean).join(' ');
               }
               function textFor(el: Element) {
@@ -1500,6 +1508,10 @@ export async function executeTool(
             parts.push(el.closest('label')?.textContent?.trim() ?? '');
             parts.push(el.getAttribute('aria-label') ?? '');
             parts.push((el as HTMLInputElement).placeholder ?? '');
+            parts.push((el.nextElementSibling as HTMLElement | null)?.innerText?.trim() ?? '');
+            parts.push((el.previousElementSibling as HTMLElement | null)?.innerText?.trim() ?? '');
+            parts.push((el.parentElement as HTMLElement | null)?.innerText?.trim() ?? '');
+            parts.push((el.closest('[role="radio"],[role="checkbox"],[role="option"],[role="button"],li,fieldset,div') as HTMLElement | null)?.innerText?.trim() ?? '');
             return parts.filter(Boolean).join(' ');
           }
           function textFor(el: Element) {

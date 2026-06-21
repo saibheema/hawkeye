@@ -412,8 +412,26 @@ function stateKey(step: FlowStep, args: Record<string, unknown>): string {
   if (step.tool === 'type_text' || step.tool === 'select_option') {
     return `${step.tool}:${String(args.selector ?? '')}:${String(args.frameId ?? '')}`;
   }
+  if (step.tool === 'click' && isRadioChoice(args)) {
+    const selector = String(args.selector ?? '');
+    const group = String(args.name ?? selector.match(/\bname=["']?([^"'\]]+)/i)?.[1] ?? selector.replace(/\[value=["']?[^"'\]]+["']?\]/gi, ''));
+    return `${step.tool}:radio:${String(args.frameId ?? '')}:${group.toLowerCase()}`;
+  }
   const label = searchableText(args, step).toLowerCase();
   return `${step.tool}:${String(args.selector ?? '')}:${String(args.frameId ?? '')}:${String(args.inputType ?? '')}:${String(args.value ?? '')}:${label}`;
+}
+
+function isRadioChoice(args: Record<string, unknown>): boolean {
+  const inputType = String(args.inputType ?? '').toLowerCase();
+  const selector = String(args.selector ?? '').toLowerCase();
+  const candidates = Array.isArray(args.locatorCandidates) ? args.locatorCandidates as Array<Record<string, unknown>> : [];
+  return inputType === 'radio'
+    || /input\[type=["']?radio/.test(selector)
+    || candidates.some((candidate) => {
+      const candidateInputType = String(candidate.inputType ?? '').toLowerCase();
+      const candidateSelector = String(candidate.selector ?? candidate.value ?? '').toLowerCase();
+      return candidateInputType === 'radio' || /input\[type=["']?radio/.test(candidateSelector);
+    });
 }
 
 function describeReplayState(step: FlowStep, args: Record<string, unknown>, reason?: string): string {
