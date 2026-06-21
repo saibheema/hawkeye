@@ -339,10 +339,7 @@ function upsertPendingState(
 function isStatefulStep(step: FlowStep, args: Record<string, unknown>): boolean {
   if (step.tool === 'type_text' || step.tool === 'select_option') return true;
   if (step.tool !== 'click') return false;
-  return String(args.inputType ?? '').toLowerCase() === 'radio'
-    || String(args.inputType ?? '').toLowerCase() === 'checkbox'
-    || args.clickKind === 'selectable'
-    || hasRecordedLabel(args, step);
+  return isSelectableClick(args);
 }
 
 function isProceedStep(step: FlowStep, args: Record<string, unknown>): boolean {
@@ -353,12 +350,29 @@ function isProceedStep(step: FlowStep, args: Record<string, unknown>): boolean {
     if (event === 'submit') return true;
     if (event === 'keydown' && String(args.key ?? '').toLowerCase() === 'enter') return true;
   }
-  return /\b(continue|next|save|submit|done|finish|book|reserve|schedule|confirm|search|go)\b/i.test(text);
+  return /\b(continue|next|save|submit|done|finish|book|reserve|schedule|confirm|search|go|new customer|get started|start)\b/i.test(text);
 }
 
-function hasRecordedLabel(args: Record<string, unknown>, step: FlowStep): boolean {
-  const text = searchableText(args, step);
-  return text.trim().length > 0;
+function isSelectableClick(args: Record<string, unknown>): boolean {
+  const inputType = String(args.inputType ?? '').toLowerCase();
+  if (inputType === 'radio' || inputType === 'checkbox') return true;
+  if (args.clickKind === 'selectable') return true;
+
+  const selector = String(args.selector ?? '').toLowerCase();
+  if (/input\[type=["']?(?:radio|checkbox)/.test(selector)) return true;
+  if (/\b(tile|slot|service|card|option|choice)\b/.test(selector)) return true;
+  if (/\[aria-(?:selected|checked|pressed)\]/.test(selector)) return true;
+
+  const candidates = Array.isArray(args.locatorCandidates) ? args.locatorCandidates as Array<Record<string, unknown>> : [];
+  return candidates.some((candidate) => {
+    const candidateInputType = String(candidate.inputType ?? '').toLowerCase();
+    if (candidateInputType === 'radio' || candidateInputType === 'checkbox') return true;
+    if (candidate.type === 'role' && /^(option|radio|checkbox|tab|switch)$/i.test(String(candidate.value ?? ''))) return true;
+    const candidateSelector = String(candidate.selector ?? candidate.value ?? '').toLowerCase();
+    return /input\[type=["']?(?:radio|checkbox)/.test(candidateSelector)
+      || /\b(tile|slot|service|card|option|choice)\b/.test(candidateSelector)
+      || /\[aria-(?:selected|checked|pressed)\]/.test(candidateSelector);
+  });
 }
 
 function searchableText(args: Record<string, unknown>, step: FlowStep): string {

@@ -1108,6 +1108,84 @@ test('reselects missing selectable tiles before proceeding', async ({ context, e
   });
 });
 
+test('does not reselect prior navigation clicks before proceeding', async ({ context, extensionId }) => {
+  const frameHtml = `<!doctype html>
+    <html>
+      <body>
+        <button id="newCustomer">New Customer</button>
+        <section id="details" hidden>
+          <label for="mileage">Mileage</label>
+          <input id="mileage" name="mileage" inputmode="numeric">
+          <button id="continue">Continue</button>
+        </section>
+        <script>
+          window.__continuedMileage = null;
+          const newCustomer = document.querySelector('#newCustomer');
+          const details = document.querySelector('#details');
+          newCustomer.addEventListener('click', () => {
+            newCustomer.hidden = true;
+            details.hidden = false;
+          });
+          document.querySelector('#continue').addEventListener('click', () => {
+            window.__continuedMileage = document.querySelector('#mileage').value;
+          });
+        </script>
+      </body>
+    </html>`;
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <iframe id="childFrame" src="/frame"></iframe>
+      </body>
+    </html>`;
+
+  await withTestServer((req) => req.url === '/frame' ? frameHtml : html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    const frame = target.frameLocator('#childFrame');
+    await frame.getByText('New Customer').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+    await frame.getByText('New Customer').click();
+    await frame.locator('#mileage').fill('24000');
+    await frame.getByText('Continue').click();
+    const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+    const steps = stopped.steps ?? [];
+    expect(steps.map((step: any) => step.tool)).toContain('type_text');
+    expect(steps.find((step: any) => step.tool === 'click' && step.args?.text === 'New Customer')?.args?.clickKind).toBe('click');
+
+    await target.frame({ url: /\/frame$/ })?.evaluate(() => {
+      window.__continuedMileage = null;
+      const newCustomer = document.querySelector('#newCustomer') as HTMLButtonElement;
+      const details = document.querySelector('#details') as HTMLElement;
+      const mileage = document.querySelector('#mileage') as HTMLInputElement;
+      newCustomer.hidden = false;
+      details.hidden = true;
+      mileage.value = '';
+    });
+
+    const flow = {
+      id: 'flow_navigation_click_not_state',
+      name: 'Navigation click is not state',
+      domain: '127.0.0.1',
+      createdAt: Date.now(),
+      steps,
+      stepCount: steps.length,
+    };
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results[0].ok).toBe(true);
+    const continuedMileage = await target.frame({ url: /\/frame$/ })?.evaluate(() => window.__continuedMileage);
+    expect(continuedMileage).toBe('24000');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('applies DOM modification tools inside an iframe', async ({ context, extensionId }) => {
   const frameHtml = `<!doctype html>
     <html>

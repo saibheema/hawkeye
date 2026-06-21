@@ -1307,7 +1307,8 @@ export async function executeTool(
           if (stepTool === 'type_text') {
             const value = (el as HTMLInputElement | HTMLTextAreaElement).value ?? '';
             const expected = String(payload.text ?? '');
-            return { ok: true as const, found: true, verified: value === expected, reason: value === expected ? undefined : 'text value mismatch' };
+            const verified = sameReplayValue(value, expected);
+            return { ok: true as const, found: true, verified, reason: verified ? undefined : 'text value mismatch' };
           }
 
           if (stepTool === 'select_option') {
@@ -1477,6 +1478,13 @@ export async function executeTool(
           }
           function attrText(el: Element) {
             return [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder'), el.getAttribute('name'), el.getAttribute('role')].filter(Boolean).join(' ');
+          }
+          function sameReplayValue(actual: string, expected: string) {
+            if (actual === expected) return true;
+            if (normalize(actual) === normalize(expected)) return true;
+            const actualDigits = actual.replace(/\D/g, '');
+            const expectedDigits = expected.replace(/\D/g, '');
+            return actualDigits.length > 0 && actualDigits === expectedDigits;
           }
           function normalize(value: string) { return value.replace(/\s+/g, ' ').trim().toLowerCase(); }
         };
