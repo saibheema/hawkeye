@@ -607,11 +607,20 @@ export async function executeTool(
                 return true;
               }
               function choiceLabelFor(el: Element) {
-                const explicitLabel = labelFor(el);
-                if (explicitLabel) return explicitLabel;
                 if (el instanceof HTMLInputElement && el.id) {
                   const labelled = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
                   if (labelled?.textContent?.trim()) return labelled.textContent.trim();
+                }
+                const closestLabel = el.closest('label')?.textContent?.trim();
+                if (closestLabel) return closestLabel;
+                const aria = el.getAttribute('aria-label') ?? el.getAttribute('title') ?? '';
+                if (aria.trim()) return aria.trim();
+                const directText = textFor(el).trim();
+                if (directText) return directText;
+                const localChoice = el.closest('[role="radio"],[role="checkbox"],[role="option"],[class*="tile" i],[class*="card" i],[class*="option" i]');
+                if (localChoice instanceof HTMLElement && localChoice !== el) {
+                  const text = localChoice.innerText?.trim();
+                  if (text) return text;
                 }
                 return [textFor(el), attrText(el)].filter(Boolean).join(' ');
               }
@@ -862,28 +871,65 @@ export async function executeTool(
                 const forId = String(payload.forId ?? '');
                 if (forId) {
                   const control = document.getElementById(forId);
-                  if (control && matchesKind(control, 'click')) return control;
+                  if (control && matchesKind(control, 'click') && choiceMatches(control, payload)) return control;
                   const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
-                  if (label && matchesKind(label, 'click')) return label;
+                  if (label && matchesKind(label, 'click') && choiceMatches(label, payload)) return label;
                 }
                 const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]'));
-                const labelNeedles = [payload.label, ...candidates.filter((c: any) => ['label', 'text', 'aria'].includes(c.type)).map((c: any) => c.value)]
+                const labelNeedles = [payload.choiceLabel, payload.label, payload.text, ...candidates.filter((c: any) => ['label', 'text', 'aria'].includes(c.type)).map((c: any) => c.value)]
                   .map((value: any) => normalize(String(value ?? '')))
                   .filter(Boolean);
                 for (const needle of labelNeedles) {
-                  const exact = elements.find((el) => normalize([labelFor(el), textFor(el), attrText(el)].filter(Boolean).join(' ')) === needle);
+                  const exact = elements.find((el) => choiceMatches(el, payload) && normalize(choiceLabelFor(el)) === needle);
                   if (exact) return exact;
                 }
                 for (const needle of labelNeedles) {
-                  const match = elements.find((el) => normalize([labelFor(el), textFor(el), attrText(el), (el as HTMLInputElement).value, el.id].filter(Boolean).join(' ')).includes(needle));
+                  const match = elements.find((el) => choiceMatches(el, payload) && normalize([choiceLabelFor(el), attrText(el), (el as HTMLInputElement).value, el.id].filter(Boolean).join(' ')).includes(needle));
                   if (match) return match;
                 }
                 const desiredValue = normalize(String(payload.value ?? ''));
                 if (desiredValue && desiredValue !== 'on') {
-                  const valueMatch = elements.find((el) => el instanceof HTMLInputElement && normalize(el.value) === desiredValue);
+                  const valueMatch = elements.find((el) => el instanceof HTMLInputElement && choiceMatches(el, payload) && normalize(el.value) === desiredValue);
                   if (valueMatch) return valueMatch;
                 }
                 return null;
+              }
+              function choiceMatches(el: Element, payload: Record<string, any>) {
+                const expectedType = String(payload.inputType ?? '').toLowerCase();
+                if (expectedType && el instanceof HTMLInputElement && el.type !== expectedType) return false;
+                const expectedName = normalize(String(payload.name ?? payload.choiceGroup ?? ''));
+                if (expectedName && el instanceof HTMLInputElement) {
+                  const actualName = normalize(el.name || groupLabelFor(el));
+                  if (actualName && actualName !== expectedName && !actualName.includes(expectedName) && !expectedName.includes(actualName)) return false;
+                }
+                return true;
+              }
+              function choiceLabelFor(el: Element) {
+                if (el instanceof HTMLInputElement && el.id) {
+                  const labelled = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+                  if (labelled?.textContent?.trim()) return labelled.textContent.trim();
+                }
+                const closestLabel = el.closest('label')?.textContent?.trim();
+                if (closestLabel) return closestLabel;
+                const aria = el.getAttribute('aria-label') ?? el.getAttribute('title') ?? '';
+                if (aria.trim()) return aria.trim();
+                const directText = textFor(el).trim();
+                if (directText) return directText;
+                const localChoice = el.closest('[role="radio"],[role="checkbox"],[role="option"],[class*="tile" i],[class*="card" i],[class*="option" i]');
+                if (localChoice instanceof HTMLElement && localChoice !== el) {
+                  const text = localChoice.innerText?.trim();
+                  if (text) return text;
+                }
+                return [textFor(el), attrText(el)].filter(Boolean).join(' ');
+              }
+              function groupLabelFor(el: Element) {
+                const fieldset = el.closest('fieldset');
+                const legend = fieldset?.querySelector('legend')?.textContent?.trim();
+                if (legend) return legend;
+                const group = el.closest('[role="radiogroup"],[role="group"],[aria-labelledby]');
+                const labelledBy = group?.getAttribute('aria-labelledby');
+                if (!labelledBy) return '';
+                return labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.textContent?.trim() ?? '').filter(Boolean).join(' ');
               }
               function labelFor(el: Element) {
                 const parts: string[] = [];
@@ -1588,11 +1634,20 @@ export async function executeTool(
             return true;
           }
           function choiceLabelFor(el: Element) {
-            const explicitLabel = labelFor(el);
-            if (explicitLabel) return explicitLabel;
             if (el instanceof HTMLInputElement && el.id) {
               const labelled = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
               if (labelled?.textContent?.trim()) return labelled.textContent.trim();
+            }
+            const closestLabel = el.closest('label')?.textContent?.trim();
+            if (closestLabel) return closestLabel;
+            const aria = el.getAttribute('aria-label') ?? el.getAttribute('title') ?? '';
+            if (aria.trim()) return aria.trim();
+            const directText = textFor(el).trim();
+            if (directText) return directText;
+            const localChoice = el.closest('[role="radio"],[role="checkbox"],[role="option"],[class*="tile" i],[class*="card" i],[class*="option" i]');
+            if (localChoice instanceof HTMLElement && localChoice !== el) {
+              const text = localChoice.innerText?.trim();
+              if (text) return text;
             }
             return [textFor(el), attrText(el)].filter(Boolean).join(' ');
           }

@@ -360,6 +360,14 @@ function findChoiceElement(payload: any): Element | null {
   const isChoice = inputType === 'radio' || inputType === 'checkbox' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
   if (!isChoice) return null;
 
+  const forId = String(payload?.forId ?? '');
+  if (forId) {
+    const control = document.getElementById(forId);
+    if (control && matchesKind(control, 'click') && choiceMatches(control, payload)) return control;
+    const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
+    if (label && matchesKind(label, 'click') && choiceMatches(label, payload)) return label;
+  }
+
   const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]'));
   const labelNeedles = [
     payload?.choiceLabel,
@@ -396,11 +404,20 @@ function choiceMatches(el: Element, payload: any): boolean {
 }
 
 function choiceLabelFor(el: Element): string {
-  const explicitLabel = labelFor(el);
-  if (explicitLabel) return explicitLabel;
   if (el instanceof HTMLInputElement && el.id) {
     const labelled = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
     if (labelled?.textContent?.trim()) return labelled.textContent.trim();
+  }
+  const closestLabel = el.closest('label')?.textContent?.trim();
+  if (closestLabel) return closestLabel;
+  const aria = el.getAttribute('aria-label') ?? el.getAttribute('title') ?? '';
+  if (aria.trim()) return aria.trim();
+  const directText = textFor(el).trim();
+  if (directText) return directText;
+  const localChoice = el.closest('[role="radio"],[role="checkbox"],[role="option"],[class*="tile" i],[class*="card" i],[class*="option" i]');
+  if (localChoice instanceof HTMLElement && localChoice !== el) {
+    const text = localChoice.innerText?.trim();
+    if (text) return text;
   }
   return [textFor(el), attrText(el)].filter(Boolean).join(' ');
 }
