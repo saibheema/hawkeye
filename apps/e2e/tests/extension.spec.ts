@@ -878,6 +878,68 @@ test('replay submit event does not submit a detached form', async ({ context, ex
   });
 });
 
+test('replays a selected radio option inside an iframe by label when selector is broad', async ({ context, extensionId }) => {
+  const frameHtml = `<!doctype html>
+    <html>
+      <body>
+        <form id="diagnosisForm">
+          <label><input type="radio" name="diagnosis" value="brake"> Brake Diagnosis</label>
+          <label><input type="radio" name="diagnosis" value="climate"> Climate Control Diagnosis</label>
+          <label><input type="radio" name="diagnosis" value="not_sure"> I am not sure</label>
+        </form>
+      </body>
+    </html>`;
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <iframe id="childFrame" src="/frame"></iframe>
+      </body>
+    </html>`;
+
+  await withTestServer((req) => req.url === '/frame' ? frameHtml : html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    const frame = target.frameLocator('#childFrame');
+    await frame.getByLabel('I am not sure').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+    await frame.getByLabel('I am not sure').check();
+    const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+    const recordedClick = (stopped.steps ?? []).find((step: any) => step.tool === 'click' && step.args?.inputType === 'radio');
+    expect(recordedClick).toBeTruthy();
+
+    recordedClick.args.selector = 'input[name="diagnosis"]';
+    recordedClick.args.locatorCandidates = [
+      { type: 'css', value: 'input[name="diagnosis"]', selector: 'input[name="diagnosis"]', score: 100, tagName: 'input', inputType: 'radio' },
+      { type: 'label', value: 'I am not sure', score: 95, tagName: 'input', inputType: 'radio' },
+      { type: 'name', value: 'diagnosis', score: 50, tagName: 'input', inputType: 'radio' },
+    ];
+
+    await frame.getByLabel('I am not sure').uncheck({ force: true }).catch(() => {});
+    await frame.getByLabel('Brake Diagnosis').check();
+
+    const flow = {
+      id: 'flow_radio_iframe',
+      name: 'Radio iframe',
+      domain: '127.0.0.1',
+      createdAt: Date.now(),
+      steps: [recordedClick],
+      stepCount: 1,
+    };
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results[0].ok).toBe(true);
+    await expect(frame.getByLabel('I am not sure')).toBeChecked();
+    await expect(frame.getByLabel('Brake Diagnosis')).not.toBeChecked();
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('applies DOM modification tools inside an iframe', async ({ context, extensionId }) => {
   const frameHtml = `<!doctype html>
     <html>

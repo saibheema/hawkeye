@@ -10,6 +10,13 @@ type NetworkActivitySnapshot = {
   lastActivityAt: number;
 };
 
+type ReplaySettleOptions = {
+  networkQuietMs?: number;
+  networkTimeoutMs?: number;
+  domQuietMs?: number;
+  domTimeoutMs?: number;
+};
+
 // ─── Test data generator ──────────────────────────────────────────────────────
 
 const FIRST_NAMES = ['Alex', 'Jordan', 'Morgan', 'Taylor', 'Casey', 'Riley', 'Drew', 'Quinn', 'Avery', 'Blake'];
@@ -196,7 +203,12 @@ export async function replayFlow(
         error = `Could not navigate to recorded start URL: ${nav.error}`;
         debug = await captureReplayDebug(tabId);
       } else {
-        await waitForReplaySettle(tabId, 1500, getNetworkActivity);
+        await waitForReplaySettle(tabId, 1000, getNetworkActivity, {
+          networkQuietMs: 700,
+          networkTimeoutMs: 2_500,
+          domQuietMs: 300,
+          domTimeoutMs: 1_000,
+        });
       }
     }
 
@@ -260,10 +272,15 @@ async function waitBeforeReplayStep(
   getNetworkActivity?: () => NetworkActivitySnapshot | undefined
 ): Promise<void> {
   if (['click', 'select_option', 'trigger_event'].includes(step.tool)) {
-    await waitForReplaySettle(tabId, 800, getNetworkActivity);
+    await waitForReplaySettle(tabId, 300, getNetworkActivity, {
+      networkQuietMs: 450,
+      networkTimeoutMs: 1_200,
+      domQuietMs: 180,
+      domTimeoutMs: 500,
+    });
     return;
   }
-  await waitForReplaySettle(tabId, 250, getNetworkActivity);
+  await waitForTabAndFramesReady(tabId, 800);
 }
 
 async function waitAfterReplayStep(
@@ -272,23 +289,29 @@ async function waitAfterReplayStep(
   getNetworkActivity?: () => NetworkActivitySnapshot | undefined
 ): Promise<void> {
   if (['click', 'select_option', 'trigger_event'].includes(step.tool)) {
-    await waitForReplaySettle(tabId, 1400, getNetworkActivity);
+    await waitForReplaySettle(tabId, 650, getNetworkActivity, {
+      networkQuietMs: 550,
+      networkTimeoutMs: 1_800,
+      domQuietMs: 250,
+      domTimeoutMs: 800,
+    });
     return;
   }
-  await waitForReplaySettle(tabId, 450, getNetworkActivity);
+  await new Promise((resolve) => setTimeout(resolve, step.tool === 'type_text' ? 100 : 250));
 }
 
 async function waitForReplaySettle(
   tabId: number,
   minimumMs: number,
-  getNetworkActivity?: () => NetworkActivitySnapshot | undefined
+  getNetworkActivity?: () => NetworkActivitySnapshot | undefined,
+  options: ReplaySettleOptions = {}
 ): Promise<void> {
   const started = Date.now();
-  await waitForTabAndFramesReady(tabId, Math.max(2500, minimumMs));
+  await waitForTabAndFramesReady(tabId, Math.max(1_200, minimumMs));
   const remaining = minimumMs - (Date.now() - started);
   if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
-  await waitForNetworkIdle(getNetworkActivity, 800, 3_500);
-  await waitForDomQuiet(tabId, 450, 1_500);
+  await waitForNetworkIdle(getNetworkActivity, options.networkQuietMs ?? 600, options.networkTimeoutMs ?? 2_000);
+  await waitForDomQuiet(tabId, options.domQuietMs ?? 250, options.domTimeoutMs ?? 900);
 }
 
 async function waitForTabAndFramesReady(tabId: number, timeoutMs: number): Promise<void> {

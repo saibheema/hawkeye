@@ -78,7 +78,7 @@ function recordClick(event: MouseEvent) {
   if (!recording || !event.isTrusted) return;
   const el = closestActionable(event.target);
   if (!el || shouldSkipClick(el)) return;
-  const clickStep: RecordedStep = { tool: 'click', args: locatorArgs(el), meta: { source: 'manual', label: labelFor(el) } };
+  const clickStep: RecordedStep = { tool: 'click', args: locatorArgs(el, choiceStateArgs(el)), meta: { source: 'manual', label: labelFor(el) } };
   if (isSubmitControl(el)) {
     const form = (el as HTMLButtonElement | HTMLInputElement).form ?? el.closest('form');
     const formSteps = form ? getFormStateSteps(form) : [];
@@ -344,6 +344,20 @@ function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {
 
     if (['button', 'submit', 'reset', 'file', 'image'].includes(el.type)) continue;
     if (['checkbox', 'radio'].includes(el.type) && !el.checked) continue;
+    if (['checkbox', 'radio'].includes(el.type)) {
+      const step = {
+        tool: 'click',
+        args: locatorArgs(el, choiceStateArgs(el)),
+        meta: {
+          source: 'manual',
+          label,
+          originalValue: el.value,
+        },
+      };
+      if (isDuplicateFieldStep(step)) continue;
+      steps.push(step);
+      continue;
+    }
 
     const step = {
       tool: 'type_text',
@@ -369,7 +383,18 @@ function locatorArgs(el: Element, extra: Record<string, unknown> = {}): Record<s
   };
 }
 
+function choiceStateArgs(el: Element): Record<string, unknown> {
+  if (!(el instanceof HTMLInputElement) || !['radio', 'checkbox'].includes(el.type)) return {};
+  return {
+    inputType: el.type,
+    value: el.value,
+    checked: el.checked,
+    label: labelFor(el),
+  };
+}
+
 function sendStep(tool: string, args: Record<string, unknown>, meta?: Record<string, unknown>) {
+  rememberFieldStep({ tool, args, meta });
   try {
     chrome.runtime.sendMessage(
       { type: 'FLOW_RECORD_STEP', payload: { tool, args, meta } },
@@ -398,12 +423,19 @@ function isDuplicateFieldStep(step: RecordedStep): boolean {
 }
 
 function fieldStepKey(step: RecordedStep): string | null {
-  if (step.tool !== 'type_text' && step.tool !== 'select_option') return null;
   const selector = typeof step.args.selector === 'string' ? step.args.selector : '';
+  if (step.tool === 'click' && ['radio', 'checkbox'].includes(String(step.args.inputType ?? ''))) {
+    const value = typeof step.args.value === 'string' ? step.args.value : '';
+    return selector ? `${step.tool}:${selector}:${value}` : null;
+  }
+  if (step.tool !== 'type_text' && step.tool !== 'select_option') return null;
   return selector ? `${step.tool}:${selector}` : null;
 }
 
 function fieldStepValue(step: RecordedStep): string | null {
+  if (step.tool === 'click' && ['radio', 'checkbox'].includes(String(step.args.inputType ?? ''))) {
+    return `${String(step.args.checked ?? true)}:${String(step.args.value ?? '')}`;
+  }
   if (step.tool === 'type_text') return typeof step.args.text === 'string' ? step.args.text : null;
   if (step.tool === 'select_option') return typeof step.args.value === 'string' ? step.args.value : null;
   return null;

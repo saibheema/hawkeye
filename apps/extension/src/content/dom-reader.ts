@@ -112,6 +112,10 @@ export function getSelector(el: Element): string {
 
   const name = (el as HTMLInputElement).name;
   if (name && ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName)) {
+    const input = el as HTMLInputElement;
+    if (input instanceof HTMLInputElement && ['radio', 'checkbox'].includes(input.type) && input.value) {
+      return `${el.tagName.toLowerCase()}[name="${cssString(name)}"][value="${cssString(input.value)}"]`;
+    }
     return `${el.tagName.toLowerCase()}[name="${CSS.escape(name)}"]`;
   }
 
@@ -162,8 +166,14 @@ export function getLocatorCandidates(el: Element): LocatorCandidate[] {
 
   const name = (el as HTMLInputElement).name;
   if (name) {
-    add({ type: 'css', value: `${tagName}[name="${cssString(name)}"]`, selector: `${tagName}[name="${cssString(name)}"]`, score: 90, tagName, inputType });
-    add({ type: 'name', value: name, score: 76, tagName, inputType });
+    const input = el as HTMLInputElement;
+    const isChoice = input instanceof HTMLInputElement && ['radio', 'checkbox'].includes(input.type);
+    if (isChoice && input.value) {
+      add({ type: 'css', value: `${tagName}[name="${cssString(name)}"][value="${cssString(input.value)}"]`, selector: `${tagName}[name="${cssString(name)}"][value="${cssString(input.value)}"]`, score: 92, tagName, inputType });
+    } else {
+      add({ type: 'css', value: `${tagName}[name="${cssString(name)}"]`, selector: `${tagName}[name="${cssString(name)}"]`, score: 90, tagName, inputType });
+      add({ type: 'name', value: name, score: 76, tagName, inputType });
+    }
   }
 
   const aria = el.getAttribute('aria-label');

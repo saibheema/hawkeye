@@ -94,6 +94,7 @@ async function handleContentMessage(
       const el = await waitForElement(p, 'click') as HTMLElement | null;
       if (el) {
         el.click();
+        await ensureChoiceState(el, p);
         sendResponse({ ok: true, selector: selectorForResponse(el, p?.selector) });
       } else {
         sendResponse({ ok: false, error: `Element not found: ${p?.selector}` });
@@ -189,6 +190,16 @@ async function waitForOption(el: HTMLSelectElement, desiredValue: string): Promi
   return option;
 }
 
+async function ensureChoiceState(el: HTMLElement, payload: any): Promise<void> {
+  if (!(el instanceof HTMLInputElement) || !['radio', 'checkbox'].includes(el.type)) return;
+  const expected = payload?.checked === false ? false : true;
+  const deadline = Date.now() + 600;
+  while (el.isConnected && el.checked !== expected && Date.now() < deadline) {
+    el.click();
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
+  }
+}
+
 function findOption(el: HTMLSelectElement, desiredValue: string): HTMLOptionElement | null {
   const desired = normalizeValue(desiredValue);
   return Array.from(el.options).find((option) =>
@@ -213,6 +224,10 @@ async function waitForElement(payload: any, kind: 'click' | 'type' | 'select', t
 }
 
 function findElement(payload: any, kind: 'click' | 'type' | 'select'): Element | null {
+  if (kind === 'click') {
+    const choice = findChoiceElement(payload);
+    if (choice) return choice;
+  }
   const selectors = [
     typeof payload?.selector === 'string' ? payload.selector : '',
     ...locatorCandidates(payload).filter((candidate) => candidate.type === 'css').map((candidate) => candidate.selector || candidate.value || ''),
@@ -236,6 +251,35 @@ function findElement(payload: any, kind: 'click' | 'type' | 'select'): Element |
   return null;
 }
 
+function findChoiceElement(payload: any): Element | null {
+  const candidates = locatorCandidates(payload);
+  const inputType = String(payload?.inputType ?? candidates.find((candidate) => candidate.inputType)?.inputType ?? '').toLowerCase();
+  const selectorText = String(payload?.selector ?? '').toLowerCase();
+  const isChoice = inputType === 'radio' || inputType === 'checkbox' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
+  if (!isChoice) return null;
+
+  const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]'));
+  const labelNeedles = [
+    payload?.label,
+    ...candidates.filter((candidate) => ['label', 'text', 'aria'].includes(candidate.type)).map((candidate) => candidate.value),
+  ].map((value) => normalize(String(value ?? ''))).filter(Boolean);
+
+  for (const needle of labelNeedles) {
+    const exact = elements.find((el) => normalize([labelFor(el), textFor(el), attrText(el)].filter(Boolean).join(' ')) === needle);
+    if (exact) return exact;
+  }
+  for (const needle of labelNeedles) {
+    const match = elements.find((el) => normalize([labelFor(el), textFor(el), attrText(el), (el as HTMLInputElement).value, el.id].filter(Boolean).join(' ')).includes(needle));
+    if (match) return match;
+  }
+
+  const desiredValue = normalize(String(payload?.value ?? ''));
+  if (desiredValue && desiredValue !== 'on') {
+    return elements.find((el) => el instanceof HTMLInputElement && normalize(el.value) === desiredValue) ?? null;
+  }
+  return null;
+}
+
 function locatorCandidates(payload: any): LocatorCandidate[] {
   return Array.isArray(payload?.locatorCandidates) ? payload.locatorCandidates : [];
 }
@@ -253,7 +297,7 @@ function findBySemanticCandidate(candidate: LocatorCandidate, kind: 'click' | 't
   const value = normalize(candidate.value ?? '');
   if (!value) return null;
   const selector = kind === 'click'
-    ? 'button,a,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],label,[onclick],[tabindex]'
+    ? 'button,a,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],input[type="radio"],input[type="checkbox"],label,[onclick],[tabindex]'
     : kind === 'select'
       ? 'select'
       : 'input:not([type="hidden"]),textarea';
