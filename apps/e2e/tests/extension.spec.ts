@@ -257,6 +257,78 @@ test('dashboard portal lists recorded flows and replay controls', async ({ conte
   await page.close();
 });
 
+test('side panel record and replay controls target the page tab', async ({ context, extensionId }) => {
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <h1>Generic Checkout</h1>
+        <label for="firstName">First name</label>
+        <input id="firstName" name="firstName">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email">
+        <label for="plan">Plan</label>
+        <select id="plan" name="plan">
+          <option value="">Choose one</option>
+          <option value="starter">Starter</option>
+          <option value="pro">Pro</option>
+        </select>
+        <button type="button" aria-pressed="false" data-addon="analytics">Analytics</button>
+        <button id="continue" type="button">Continue</button>
+        <div id="result"></div>
+        <script>
+          document.querySelector('[data-addon="analytics"]').addEventListener('click', (event) => {
+            event.currentTarget.setAttribute('aria-pressed', 'true');
+          });
+          document.querySelector('#continue').addEventListener('click', () => {
+            document.querySelector('#result').textContent = [
+              document.querySelector('#firstName').value,
+              document.querySelector('#email').value,
+              document.querySelector('#plan').value,
+              document.querySelector('[data-addon="analytics"]').getAttribute('aria-pressed'),
+            ].join('|');
+          });
+        </script>
+      </body>
+    </html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    await extensionPage.evaluate(() => chrome.storage.local.clear());
+
+    await extensionPage.getByRole('button', { name: /Actions/ }).click();
+    await extensionPage.getByRole('button', { name: /Record Flows/ }).click();
+    await expect(extensionPage.getByText('Capture a customer journey')).toBeVisible();
+
+    await extensionPage.getByRole('button', { name: /^Record$/ }).click();
+    await expect(extensionPage.getByText('Recording flow')).toBeVisible({ timeout: 10_000 });
+
+    await target.locator('#firstName').fill('Samantha');
+    await target.locator('#email').fill('sam@example.com');
+    await target.locator('#plan').selectOption('pro');
+    await target.getByRole('button', { name: 'Analytics' }).click();
+    await target.getByRole('button', { name: 'Continue' }).click();
+    await expect(target.locator('#result')).toHaveText('Samantha|sam@example.com|pro|true');
+
+    await extensionPage.getByRole('button', { name: /^Stop$/ }).click();
+    await expect(extensionPage.getByText(/5 steps/)).toBeVisible({ timeout: 10_000 });
+    await extensionPage.getByPlaceholder(/Flow name/).fill('SidePanel_Generic_Form');
+    await extensionPage.getByRole('button', { name: /^Save$/ }).click();
+    await expect(extensionPage.getByText('Flow Library')).toBeVisible();
+    await expect(extensionPage.getByText('SidePanel_Generic_Form', { exact: true }).first()).toBeVisible();
+
+    await extensionPage.getByRole('button', { name: /^Run 1x$/ }).first().click();
+    await expect(extensionPage.getByText('1/1 passed')).toBeVisible({ timeout: 45_000 });
+    await expect(target.locator('#result')).toHaveText('Samantha|sam@example.com|pro|true');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('records Enter key submissions as replayable steps', async ({ context, extensionId }) => {
   const html = `<!doctype html>
     <html>

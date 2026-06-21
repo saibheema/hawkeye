@@ -179,7 +179,7 @@ async function handleMessage(
         const tab = await chrome.tabs.get(tabId).catch(() => null);
         startRecording(tabId, { startUrl: tab?.url, startTitle: tab?.title });
         await injectConfiguredContentScripts(tabId);
-        const startAck = await sendToTab(tabId, { type: 'FLOW_RECORD_START', payload: {} });
+        const startAck = await sendToTabFrames(tabId, { type: 'FLOW_RECORD_START', payload: {} });
         if (!startAck?.ok) {
           const state = stopRecording(tabId);
           sendResponse({
@@ -191,13 +191,13 @@ async function handleMessage(
           });
           break;
         }
-        sendResponse({ ok: true, startUrl: tab?.url, startTitle: tab?.title });
+        sendResponse({ ok: true, startUrl: tab?.url, startTitle: tab?.title, ackedFrames: startAck.ackedFrames });
         break;
       }
 
       case 'FLOW_RECORD_STOP': {
         if (!tabId) { sendResponse({ error: 'no tab' }); break; }
-        chrome.tabs.sendMessage(tabId, { type: 'FLOW_RECORD_STOP', payload: {} }, () => { void chrome.runtime.lastError; });
+        await sendToTabFrames(tabId, { type: 'FLOW_RECORD_STOP', payload: {} }, { requireAck: false });
         const state = stopRecording(tabId);
         sendResponse({ ok: true, steps: state.steps, startUrl: state.startUrl, startTitle: state.startTitle });
         break;
@@ -358,6 +358,51 @@ function sendToTab(tabId: number, message: unknown): Promise<any> {
         return;
       }
       resolve(res ?? { ok: false, error: 'No response from content script' });
+    });
+  });
+}
+
+async function sendToTabFrames(
+  tabId: number,
+  message: unknown,
+  options: { requireAck?: boolean } = {}
+): Promise<{ ok: boolean; ackedFrames: number; results: Array<{ frameId: number; ok: boolean; error?: string }>; error?: string }> {
+  const requireAck = options.requireAck ?? true;
+  const frames = await getTabFrames(tabId);
+  const results = await Promise.all(frames.map((frame) => sendToFrame(tabId, frame.frameId, message)));
+  const ackedFrames = results.filter((result) => result.ok).length;
+  if (ackedFrames > 0 || !requireAck) return { ok: true, ackedFrames, results };
+  return {
+    ok: false,
+    ackedFrames,
+    results,
+    error: results.find((result) => result.error)?.error ?? 'No content script frame acknowledged the recorder message.',
+  };
+}
+
+async function getTabFrames(tabId: number): Promise<Array<{ frameId: number }>> {
+  try {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId });
+    const frameIds = [...new Set((frames ?? []).map((frame) => frame.frameId))];
+    return frameIds.length > 0 ? frameIds.map((frameId) => ({ frameId })) : [{ frameId: 0 }];
+  } catch {
+    return [{ frameId: 0 }];
+  }
+}
+
+function sendToFrame(
+  tabId: number,
+  frameId: number,
+  message: unknown
+): Promise<{ frameId: number; ok: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, message, { frameId }, (res) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        resolve({ frameId, ok: false, error: error.message });
+        return;
+      }
+      resolve({ frameId, ok: !!res?.ok, error: res?.ok ? undefined : res?.error ?? 'No recorder response from frame' });
     });
   });
 }

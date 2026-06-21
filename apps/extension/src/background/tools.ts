@@ -2650,7 +2650,7 @@ async function execInIframe(
           return { ok: false, error: e.message };
         }
       },
-      args: [iframeSelector, fn.toString(), extraArgs],
+      args: safeScriptArgs([iframeSelector, fn.toString(), extraArgs]),
     });
     return results?.[0]?.result ?? { ok: false, error: 'No result from executeScript' };
   } catch (err: any) {
@@ -2718,7 +2718,7 @@ async function execInFrameId(
       target: { tabId, frameIds: [frameId] },
       world: 'MAIN',
       func,
-      args,
+      args: safeScriptArgs(args),
     });
     return results?.[0]?.result ?? { ok: false, error: 'No result from frame executeScript' };
   } catch (err: any) {
@@ -2745,10 +2745,33 @@ async function execInFrame(
       target: { tabId, frameIds: [frameId] },
       world: 'MAIN',
       func,
-      args,
+      args: safeScriptArgs(args),
     });
     return results?.[0]?.result ?? { ok: false, error: 'No result from frame executeScript' };
   } catch (err: any) {
     return { ok: false, error: err.message ?? String(err) };
   }
+}
+
+function safeScriptArgs(args: unknown[]): unknown[] {
+  return args.map((arg) => sanitizeScriptValue(arg, new WeakSet<object>()));
+}
+
+function sanitizeScriptValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'bigint') return String(value);
+  if (typeof value === 'function' || typeof value === 'symbol') return null;
+  if (value === null || typeof value !== 'object') return value;
+
+  if (seen.has(value)) return null;
+  seen.add(value);
+
+  if (Array.isArray(value)) return value.map((item) => sanitizeScriptValue(item, seen));
+
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    output[key] = sanitizeScriptValue(item, seen);
+  }
+  return output;
 }

@@ -43,8 +43,17 @@ function isPageTab(tab: chrome.tabs.Tab): boolean {
 }
 
 async function getCurrentPageTab(): Promise<chrome.tabs.Tab | undefined> {
-  const tabs = await chrome.tabs.query({ currentWindow: true });
-  return tabs.find((tab) => tab.active && isPageTab(tab)) ?? tabs.find(isPageTab);
+  const currentWindowTabs = await chrome.tabs.query({ currentWindow: true });
+  const currentWindowPage = currentWindowTabs.find((tab) => tab.active && isPageTab(tab))
+    ?? currentWindowTabs.find(isPageTab);
+  if (currentWindowPage) return currentWindowPage;
+
+  const activeTabs = await chrome.tabs.query({ active: true });
+  const activePage = activeTabs.find(isPageTab);
+  if (activePage) return activePage;
+
+  const allTabs = await chrome.tabs.query({});
+  return allTabs.find(isPageTab);
 }
 
 // ─── Reset Button ─────────────────────────────────────────────────────────────
@@ -539,7 +548,7 @@ function FlowsPanel() {
   }, []);
 
   const toggleRecord = async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await getCurrentPageTab();
     if (!recording) {
       chrome.runtime.sendMessage({ type: 'FLOW_RECORD_START', tabId: tab?.id }, (res) => {
         if (!res?.ok) {
@@ -607,7 +616,7 @@ function FlowsPanel() {
   };
 
   const startReplay = async (flow: any) => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await getCurrentPageTab();
     if (!tab?.id) return;
     setReplaying(flow.id);
     setReplayLog([]);
