@@ -453,6 +453,7 @@ export async function executeTool(
                 if (kind === 'click') {
                   const choice = findChoiceElement(payload);
                   if (choice) return choice;
+                  if (payload.clickKind === 'selectable') return null;
                   const semantic = findRecordedClickElement(payload);
                   if (semantic) return semantic;
                   if (hasSemanticClickIntent(payload) && isBrittleClickSelector(payload.selector)) return null;
@@ -568,19 +569,19 @@ export async function executeTool(
                 const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates : [];
                 const inputType = String(payload.inputType ?? candidates.find((c: any) => c.inputType)?.inputType ?? '').toLowerCase();
                 const selectorText = String(payload.selector ?? '').toLowerCase();
-                const isChoice = inputType === 'radio' || inputType === 'checkbox' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
+                const isChoice = inputType === 'radio' || inputType === 'checkbox' || payload.clickKind === 'selectable' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
                 if (!isChoice) return null;
-                const forId = String(payload.forId ?? '');
-                if (forId) {
-                  const control = document.getElementById(forId);
-                  if (control && matchesKind(control, 'click') && choiceMatches(control, payload)) return control;
-                  const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
-                  if (label && matchesKind(label, 'click') && choiceMatches(label, payload)) return label;
-                }
-                const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]'));
                 const labelNeedles = [payload.choiceLabel, payload.label, payload.text, ...candidates.filter((c: any) => ['label', 'text', 'aria'].includes(c.type)).map((c: any) => c.value)]
                   .map((value: any) => normalize(String(value ?? '')))
                   .filter(Boolean);
+                const forId = String(payload.forId ?? '');
+                if (forId) {
+                  const control = document.getElementById(forId);
+                  if (control && matchesKind(control, 'click') && choiceMatches(control, payload) && matchesChoiceNeedle(control, labelNeedles, false)) return control;
+                  const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
+                  if (label && matchesKind(label, 'click') && choiceMatches(label, payload) && matchesChoiceNeedle(label, labelNeedles, false)) return label;
+                }
+                const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],[role="option"],label,[class*="tile" i],[class*="card" i],[class*="option" i],[class*="choice" i],[class*="service" i]'));
                 for (const needle of labelNeedles) {
                   const exact = elements.find((el) => choiceMatches(el, payload) && normalize(choiceLabelFor(el)) === needle);
                   if (exact) return exact;
@@ -595,6 +596,11 @@ export async function executeTool(
                   if (valueMatch) return valueMatch;
                 }
                 return null;
+              }
+              function matchesChoiceNeedle(el: Element, needles: string[], allowContains: boolean) {
+                if (needles.length === 0) return true;
+                const label = normalize(choiceLabelFor(el));
+                return needles.some((needle) => label === needle || (allowContains && needle.length > 2 && label.includes(needle)));
               }
               function choiceMatches(el: Element, payload: Record<string, any>) {
                 const expectedType = String(payload.inputType ?? '').toLowerCase();
@@ -751,6 +757,7 @@ export async function executeTool(
                 if (kind === 'click') {
                   const choice = findChoiceElement(payload);
                   if (choice) return choice;
+                  if (payload.clickKind === 'selectable') return null;
                   const semantic = findRecordedClickElement(payload);
                   if (semantic) return semantic;
                   if (hasSemanticClickIntent(payload) && isBrittleClickSelector(payload.selector)) return null;
@@ -866,19 +873,19 @@ export async function executeTool(
                 const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates : [];
                 const inputType = String(payload.inputType ?? candidates.find((c: any) => c.inputType)?.inputType ?? '').toLowerCase();
                 const selectorText = String(payload.selector ?? '').toLowerCase();
-                const isChoice = inputType === 'radio' || inputType === 'checkbox' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
+                const isChoice = inputType === 'radio' || inputType === 'checkbox' || payload.clickKind === 'selectable' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
                 if (!isChoice) return null;
-                const forId = String(payload.forId ?? '');
-                if (forId) {
-                  const control = document.getElementById(forId);
-                  if (control && matchesKind(control, 'click') && choiceMatches(control, payload)) return control;
-                  const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
-                  if (label && matchesKind(label, 'click') && choiceMatches(label, payload)) return label;
-                }
-                const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]'));
                 const labelNeedles = [payload.choiceLabel, payload.label, payload.text, ...candidates.filter((c: any) => ['label', 'text', 'aria'].includes(c.type)).map((c: any) => c.value)]
                   .map((value: any) => normalize(String(value ?? '')))
                   .filter(Boolean);
+                const forId = String(payload.forId ?? '');
+                if (forId) {
+                  const control = document.getElementById(forId);
+                  if (control && matchesKind(control, 'click') && choiceMatches(control, payload) && matchesChoiceNeedle(control, labelNeedles, false)) return control;
+                  const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
+                  if (label && matchesKind(label, 'click') && choiceMatches(label, payload) && matchesChoiceNeedle(label, labelNeedles, false)) return label;
+                }
+                const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],[role="option"],label,[class*="tile" i],[class*="card" i],[class*="option" i],[class*="choice" i],[class*="service" i]'));
                 for (const needle of labelNeedles) {
                   const exact = elements.find((el) => choiceMatches(el, payload) && normalize(choiceLabelFor(el)) === needle);
                   if (exact) return exact;
@@ -893,6 +900,11 @@ export async function executeTool(
                   if (valueMatch) return valueMatch;
                 }
                 return null;
+              }
+              function matchesChoiceNeedle(el: Element, needles: string[], allowContains: boolean) {
+                if (needles.length === 0) return true;
+                const label = normalize(choiceLabelFor(el));
+                return needles.some((needle) => label === needle || (allowContains && needle.length > 2 && label.includes(needle)));
               }
               function choiceMatches(el: Element, payload: Record<string, any>) {
                 const expectedType = String(payload.inputType ?? '').toLowerCase();
@@ -1564,6 +1576,7 @@ export async function executeTool(
             if (targetKind === 'click') {
               const choice = findChoiceElement(payload);
               if (choice) return choice;
+              if (payload.clickKind === 'selectable') return null;
               const semantic = findRecordedClickElement(payload);
               if (semantic) return semantic;
             }
@@ -1595,19 +1608,19 @@ export async function executeTool(
             const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates : [];
             const inputType = String(payload.inputType ?? candidates.find((candidate: any) => candidate.inputType)?.inputType ?? '').toLowerCase();
             const selectorText = String(payload.selector ?? '').toLowerCase();
-            const isChoice = inputType === 'radio' || inputType === 'checkbox' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
+            const isChoice = inputType === 'radio' || inputType === 'checkbox' || payload.clickKind === 'selectable' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
             if (!isChoice) return null;
-            const forId = String(payload.forId ?? '');
-            if (forId) {
-              const control = document.getElementById(forId);
-              if (control && matchesKind(control, 'click') && choiceMatches(control, payload)) return control;
-              const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
-              if (label && matchesKind(label, 'click') && choiceMatches(label, payload)) return label;
-            }
-            const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]'));
             const labelNeedles = [payload.choiceLabel, payload.label, payload.text, ...candidates.filter((candidate: any) => ['label', 'text', 'aria'].includes(candidate.type)).map((candidate: any) => candidate.value)]
               .map((value: any) => normalize(String(value ?? '')))
               .filter(Boolean);
+            const forId = String(payload.forId ?? '');
+            if (forId) {
+              const control = document.getElementById(forId);
+              if (control && matchesKind(control, 'click') && choiceMatches(control, payload) && matchesChoiceNeedle(control, labelNeedles, false)) return control;
+              const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
+              if (label && matchesKind(label, 'click') && choiceMatches(label, payload) && matchesChoiceNeedle(label, labelNeedles, false)) return label;
+            }
+            const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],[role="option"],label,[class*="tile" i],[class*="card" i],[class*="option" i],[class*="choice" i],[class*="service" i]'));
             for (const needle of labelNeedles) {
               const exact = elements.find((node) => choiceMatches(node, payload) && normalize(choiceLabelFor(node)) === needle);
               if (exact) return exact;
@@ -1622,6 +1635,11 @@ export async function executeTool(
               if (valueMatch) return valueMatch;
             }
             return null;
+          }
+          function matchesChoiceNeedle(el: Element, needles: string[], allowContains: boolean) {
+            if (needles.length === 0) return true;
+            const label = normalize(choiceLabelFor(el));
+            return needles.some((needle) => label === needle || (allowContains && needle.length > 2 && label.includes(needle)));
           }
           function choiceMatches(el: Element, payload: Record<string, any>) {
             const expectedType = String(payload.inputType ?? '').toLowerCase();

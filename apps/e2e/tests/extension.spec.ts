@@ -1901,6 +1901,18 @@ test('live Avis Ford scheduler records and replays same data without booking', a
   const results = await replayFlow(extensionPage, tabId, flow, 1, 'same', {});
   expect(results).toHaveLength(1);
   expect(results[0].ok, JSON.stringify(results[0], null, 2)).toBe(true);
+  const replayFrame = scheduler();
+  const selectedServiceSummary = await replayFrame.getByText('Selected Services', { exact: true }).first().evaluate((node) => {
+    let current: Element | null = node;
+    for (let i = 0; current && i < 5; i++) {
+      const text = (current as HTMLElement).innerText ?? current.textContent ?? '';
+      if (/Selected Services/i.test(text) && /Service Location|Transportation Type|Note on Price/i.test(text)) return text;
+      current = current.parentElement;
+    }
+    return (node.parentElement as HTMLElement | null)?.innerText ?? node.textContent ?? '';
+  });
+  expect(selectedServiceSummary).toContain('Oil Change');
+  expect(selectedServiceSummary).not.toMatch(/The Works/);
 
   await extensionPage.close();
   await target.close();
