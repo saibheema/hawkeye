@@ -439,7 +439,7 @@ function ChatPanel({
 
 // ─── Flows Panel ─────────────────────────────────────────────────────────────
 
-type ReplayEvent = { type: string; runIndex: number; total: number; stepIndex?: number; stepTool?: string; result?: any; results?: any[] };
+type ReplayEvent = { type: string; runIndex: number; total: number; stepIndex?: number; stepTool?: string; result?: any; results?: any[]; flowId?: string; flowName?: string; flowStepCount?: number };
 type FieldStrategy = 'same' | 'random';
 type FlowField = {
   id: string;
@@ -743,7 +743,10 @@ function FlowsPanel() {
           {flows.map((flow) => (
             <div
               key={flow.id}
-              onClick={() => setSelectedFlowId(flow.id)}
+              onClick={() => {
+                setSelectedFlowId(flow.id);
+                setReplayLog([]);
+              }}
               style={{ border: `1px solid ${selectedFlow?.id === flow.id ? C.accent : C.border}`, borderRadius: C.radius, overflow: 'hidden', background: selectedFlow?.id === flow.id ? '#fbfdff' : C.bg, cursor: 'pointer' }}
             >
               <div style={{ padding: '9px 11px', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -871,6 +874,11 @@ function FlowsPanel() {
         <div style={{ border: `1px solid ${C.border}`, borderRadius: C.radius, overflow: 'hidden' }}>
           <div style={{ padding: '6px 12px', background: C.bgSubtle, fontSize: 11, fontWeight: 600, color: C.textSecond, borderBottom: `1px solid ${C.borderLight}` }}>
             Replay Log
+            {replayLog[0]?.flowName && (
+              <span style={{ marginLeft: 6, color: C.textMuted, fontFamily: C.fontMono }}>
+                {replayLog[0].flowName} · {replayLog[0].flowStepCount ?? '?'} steps · {replayLog[0].flowId}
+              </span>
+            )}
           </div>
           <div style={{ padding: '6px 0', maxHeight: 200, overflowY: 'auto' }}>
             {replayLog.filter((e) => e.type === 'run_start' || e.type === 'run_done').map((e, i) => (

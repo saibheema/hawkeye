@@ -296,9 +296,17 @@ async function handleMessage(
         };
         sendResponse({ ok: true, started: true });
         replayFlow(flow, tabId, repeatCount, dataMode ?? 'same', (event) => {
-          chrome.runtime.sendMessage({ type: 'FLOW_REPLAY_EVENT', payload: event }).catch(() => {});
+          chrome.runtime.sendMessage({
+            type: 'FLOW_REPLAY_EVENT',
+            payload: {
+              ...event,
+              flowId: flow.id,
+              flowName: flow.name,
+              flowStepCount: Array.isArray(flow.steps) ? flow.steps.length : flow.stepCount,
+            },
+          }).catch(() => {});
         }, fieldStrategies, () => networkActivity.get(tabId)).catch((err) => {
-          chrome.runtime.sendMessage({ type: 'FLOW_REPLAY_EVENT', payload: { type: 'all_done', error: err.message } }).catch(() => {});
+          chrome.runtime.sendMessage({ type: 'FLOW_REPLAY_EVENT', payload: { type: 'all_done', error: err.message, flowId: flow.id, flowName: flow.name, flowStepCount: Array.isArray(flow.steps) ? flow.steps.length : flow.stepCount } }).catch(() => {});
         });
         break;
       }
