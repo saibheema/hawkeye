@@ -78,7 +78,7 @@ function recordClick(event: MouseEvent) {
   if (!recording || !event.isTrusted) return;
   const el = closestActionable(event.target);
   if (!el || shouldSkipClick(el)) return;
-  const clickStep: RecordedStep = { tool: 'click', args: locatorArgs(el, choiceStateArgs(el)), meta: { source: 'manual', label: labelFor(el) } };
+  const clickStep: RecordedStep = { tool: 'click', args: locatorArgs(el, clickStateArgs(el)), meta: { source: 'manual', label: labelFor(el) } };
   if (isSubmitControl(el)) {
     const form = (el as HTMLButtonElement | HTMLInputElement).form ?? el.closest('form');
     const formSteps = form ? getFormStateSteps(form) : [];
@@ -347,7 +347,7 @@ function getFormStateSteps(form: HTMLFormElement): RecordedStep[] {
     if (['checkbox', 'radio'].includes(el.type)) {
       const step = {
         tool: 'click',
-        args: locatorArgs(el, choiceStateArgs(el)),
+        args: locatorArgs(el, clickStateArgs(el)),
         meta: {
           source: 'manual',
           label,
@@ -383,14 +383,38 @@ function locatorArgs(el: Element, extra: Record<string, unknown> = {}): Record<s
   };
 }
 
-function choiceStateArgs(el: Element): Record<string, unknown> {
-  if (!(el instanceof HTMLInputElement) || !['radio', 'checkbox'].includes(el.type)) return {};
-  return {
-    inputType: el.type,
-    value: el.value,
-    checked: el.checked,
-    label: labelFor(el),
+function clickStateArgs(el: Element): Record<string, unknown> {
+  const label = labelFor(el);
+  const input = el instanceof HTMLInputElement ? el : null;
+  const role = el.getAttribute('role') ?? '';
+  const args: Record<string, unknown> = {
+    label,
+    text: visibleClickText(el),
+    tagName: el.tagName.toLowerCase(),
+    role,
+    clickKind: isSelectableWidget(el) ? 'selectable' : 'click',
   };
+  if (input && ['radio', 'checkbox'].includes(input.type)) {
+    args.inputType = input.type;
+    args.value = input.value;
+    args.checked = input.checked;
+  }
+  return args;
+}
+
+function visibleClickText(el: Element): string {
+  const input = el as HTMLInputElement;
+  if (input instanceof HTMLInputElement && ['button', 'submit', 'reset'].includes(input.type)) return input.value.trim();
+  return el.textContent?.replace(/\s+/g, ' ').trim().slice(0, 160) ?? '';
+}
+
+function isSelectableWidget(el: Element): boolean {
+  if (el instanceof HTMLInputElement && ['radio', 'checkbox'].includes(el.type)) return true;
+  const role = el.getAttribute('role')?.toLowerCase() ?? '';
+  if (['option', 'radio', 'checkbox', 'tab', 'switch'].includes(role)) return true;
+  if (el.hasAttribute('aria-selected') || el.hasAttribute('aria-pressed') || el.hasAttribute('aria-checked')) return true;
+  const classes = typeof (el as HTMLElement).className === 'string' ? (el as HTMLElement).className.toLowerCase() : '';
+  return /\b(tile|card|option|slot|time|selected|active|choice)\b/.test(classes);
 }
 
 function sendStep(tool: string, args: Record<string, unknown>, meta?: Record<string, unknown>) {

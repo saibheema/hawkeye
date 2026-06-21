@@ -940,6 +940,87 @@ test('replays a selected radio option inside an iframe by label when selector is
   });
 });
 
+test('replays a selected time tile inside an iframe by recorded text when selector is broad', async ({ context, extensionId }) => {
+  const frameHtml = `<!doctype html>
+    <html>
+      <body>
+        <div id="times">
+          <div class="time-slot selected" role="option" tabindex="0" aria-selected="true" data-time="09:00"><span class="time-label">9:00 AM</span></div>
+          <div class="time-slot" role="option" tabindex="0" aria-selected="false" data-time="10:30"><span class="time-label">10:30 AM</span></div>
+          <div class="time-slot" role="option" tabindex="0" aria-selected="false" data-time="13:00"><span class="time-label">1:00 PM</span></div>
+        </div>
+        <script>
+          document.querySelectorAll('.time-slot').forEach((slot) => {
+            slot.addEventListener('click', () => {
+              document.querySelectorAll('.time-slot').forEach((other) => {
+                other.classList.remove('selected');
+                other.setAttribute('aria-selected', 'false');
+              });
+              slot.classList.add('selected');
+              slot.setAttribute('aria-selected', 'true');
+            });
+          });
+        </script>
+      </body>
+    </html>`;
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <iframe id="childFrame" src="/frame"></iframe>
+      </body>
+    </html>`;
+
+  await withTestServer((req) => req.url === '/frame' ? frameHtml : html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    const frame = target.frameLocator('#childFrame');
+    await frame.getByText('10:30 AM').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+    await frame.getByText('10:30 AM').click();
+    const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+    const recordedClick = (stopped.steps ?? []).find((step: any) => step.tool === 'click' && step.args?.text === '10:30 AM');
+    expect(recordedClick).toBeTruthy();
+
+    recordedClick.args.selector = '.time-slot';
+    recordedClick.args.locatorCandidates = [
+      { type: 'css', value: '.time-slot', selector: '.time-slot', score: 100, tagName: 'div' },
+      { type: 'text', value: '10:30 AM', score: 95, tagName: 'div' },
+      { type: 'role', value: 'option', score: 50, tagName: 'div' },
+    ];
+
+    await target.frame({ url: /\/frame$/ })?.evaluate(() => {
+      document.querySelectorAll('.time-slot').forEach((slot) => {
+        slot.classList.remove('selected');
+        slot.setAttribute('aria-selected', 'false');
+      });
+      const first = document.querySelector('[data-time="09:00"]');
+      first?.classList.add('selected');
+      first?.setAttribute('aria-selected', 'true');
+    });
+
+    const flow = {
+      id: 'flow_time_tile_iframe',
+      name: 'Time tile iframe',
+      domain: '127.0.0.1',
+      createdAt: Date.now(),
+      steps: [recordedClick],
+      stepCount: 1,
+    };
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results[0].ok).toBe(true);
+    await expect(frame.locator('[data-time="10:30"]')).toHaveAttribute('aria-selected', 'true');
+    await expect(frame.locator('[data-time="09:00"]')).toHaveAttribute('aria-selected', 'false');
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('applies DOM modification tools inside an iframe', async ({ context, extensionId }) => {
   const frameHtml = `<!doctype html>
     <html>

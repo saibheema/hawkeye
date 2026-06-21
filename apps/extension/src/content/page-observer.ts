@@ -93,8 +93,8 @@ async function handleContentMessage(
     case 'DOM_CLICK': {
       const el = await waitForElement(p, 'click') as HTMLElement | null;
       if (el) {
-        el.click();
-        await ensureChoiceState(el, p);
+        await performReplayClick(el);
+        await ensureSelectedState(el, p);
         sendResponse({ ok: true, selector: selectorForResponse(el, p?.selector) });
       } else {
         sendResponse({ ok: false, error: `Element not found: ${p?.selector}` });
@@ -190,14 +190,49 @@ async function waitForOption(el: HTMLSelectElement, desiredValue: string): Promi
   return option;
 }
 
-async function ensureChoiceState(el: HTMLElement, payload: any): Promise<void> {
-  if (!(el instanceof HTMLInputElement) || !['radio', 'checkbox'].includes(el.type)) return;
-  const expected = payload?.checked === false ? false : true;
+async function performReplayClick(el: HTMLElement): Promise<void> {
+  el.scrollIntoView?.({ block: 'center', inline: 'center' });
+  await new Promise((resolve) => window.setTimeout(resolve, 40));
+  const rect = el.getBoundingClientRect();
+  const clientX = Math.max(0, Math.round(rect.left + rect.width / 2));
+  const clientY = Math.max(0, Math.round(rect.top + rect.height / 2));
+  for (const eventName of ['pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
+    const EventCtor = eventName.startsWith('pointer') && typeof PointerEvent !== 'undefined' ? PointerEvent : MouseEvent;
+    el.dispatchEvent(new EventCtor(eventName, { bubbles: true, cancelable: true, clientX, clientY, button: 0 }));
+  }
+  el.click();
+}
+
+async function ensureSelectedState(el: HTMLElement, payload: any): Promise<void> {
+  if (el instanceof HTMLInputElement && ['radio', 'checkbox'].includes(el.type)) {
+    const expected = payload?.checked === false ? false : true;
+    const deadline = Date.now() + 600;
+    while (el.isConnected && el.checked !== expected && Date.now() < deadline) {
+      await performReplayClick(el);
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+    }
+    return;
+  }
+  if (payload?.clickKind !== 'selectable') return;
   const deadline = Date.now() + 600;
-  while (el.isConnected && el.checked !== expected && Date.now() < deadline) {
-    el.click();
+  while (el.isConnected && selectedState(el) === false && Date.now() < deadline) {
+    await performReplayClick(el);
     await new Promise((resolve) => window.setTimeout(resolve, 80));
   }
+}
+
+function selectedState(el: HTMLElement): boolean | null {
+  const aria = el.getAttribute('aria-selected') ?? el.getAttribute('aria-pressed') ?? el.getAttribute('aria-checked');
+  if (aria === 'true') return true;
+  if (aria === 'false') return false;
+  const dataState = [el.getAttribute('data-state'), el.getAttribute('data-selected'), el.getAttribute('data-active')].filter(Boolean).join(' ').toLowerCase();
+  const classes = typeof el.className === 'string' ? el.className.toLowerCase() : '';
+  const stateText = `${dataState} ${classes}`;
+  if (/\b(selected|active|checked|chosen|current)\b/.test(stateText)) return true;
+  if (/\b(unselected|inactive|disabled)\b/.test(stateText)) return false;
+  const checked = el.querySelector('input[type="radio"]:checked,input[type="checkbox"]:checked');
+  if (checked) return true;
+  return null;
 }
 
 function findOption(el: HTMLSelectElement, desiredValue: string): HTMLOptionElement | null {
@@ -227,6 +262,8 @@ function findElement(payload: any, kind: 'click' | 'type' | 'select'): Element |
   if (kind === 'click') {
     const choice = findChoiceElement(payload);
     if (choice) return choice;
+    const semantic = findRecordedClickElement(payload);
+    if (semantic) return semantic;
   }
   const selectors = [
     typeof payload?.selector === 'string' ? payload.selector : '',
@@ -249,6 +286,61 @@ function findElement(payload: any, kind: 'click' | 'type' | 'select'): Element |
   }
 
   return null;
+}
+
+function findRecordedClickElement(payload: any): Element | null {
+  const candidates = locatorCandidates(payload);
+  const needles = [
+    payload?.label,
+    payload?.text,
+    ...candidates.filter((candidate) => ['label', 'text', 'aria'].includes(candidate.type)).map((candidate) => candidate.value),
+  ].map((value) => normalize(String(value ?? ''))).filter(Boolean);
+  if (needles.length === 0) return null;
+
+  const elements = Array.from(document.querySelectorAll([
+    'button',
+    'a[href]',
+    '[role="button"]',
+    '[role="option"]',
+    '[role="radio"]',
+    '[role="checkbox"]',
+    '[role="tab"]',
+    '[aria-selected]',
+    '[aria-pressed]',
+    '[aria-checked]',
+    'input[type="button"]',
+    'input[type="submit"]',
+    'input[type="reset"]',
+    'label',
+    '[onclick]',
+    '[tabindex]',
+    '[class*="tile" i]',
+    '[class*="card" i]',
+    '[class*="option" i]',
+    '[class*="slot" i]',
+    '[class*="time" i]',
+  ].join(','))).filter(isUsableClickTarget);
+  const ranked = elements
+    .map((el) => ({ el, text: normalize([labelFor(el), textFor(el), attrText(el)].filter(Boolean).join(' ')) }))
+    .filter((item) => item.text);
+
+  for (const needle of needles) {
+    const exact = ranked.filter((item) => item.text === needle).sort((a, b) => a.text.length - b.text.length)[0];
+    if (exact) return exact.el;
+  }
+  for (const needle of needles.filter((value) => value.length > 2)) {
+    const contains = ranked.filter((item) => item.text.includes(needle)).sort((a, b) => a.text.length - b.text.length)[0];
+    if (contains) return contains.el;
+  }
+  return null;
+}
+
+function isUsableClickTarget(el: Element): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  const rect = el.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  if ((el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true') return false;
+  return true;
 }
 
 function findChoiceElement(payload: any): Element | null {
