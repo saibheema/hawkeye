@@ -93,7 +93,7 @@ async function handleContentMessage(
     case 'DOM_CLICK': {
       const el = await waitForElement(p, 'click') as HTMLElement | null;
       if (el) {
-        await performReplayClick(el);
+        await performReplayClick(replayClickTarget(el, p) ?? el);
         await ensureSelectedState(el, p);
         sendResponse({ ok: true, selector: selectorForResponse(el, p?.selector) });
       } else {
@@ -208,7 +208,7 @@ async function ensureSelectedState(el: HTMLElement, payload: any): Promise<void>
     const expected = payload?.checked === false ? false : true;
     const deadline = Date.now() + 600;
     while (el.isConnected && el.checked !== expected && Date.now() < deadline) {
-      await performReplayClick(el);
+      await performReplayClick(replayClickTarget(el, payload) ?? el);
       await new Promise((resolve) => window.setTimeout(resolve, 80));
     }
     return;
@@ -216,9 +216,38 @@ async function ensureSelectedState(el: HTMLElement, payload: any): Promise<void>
   if (payload?.clickKind !== 'selectable') return;
   const deadline = Date.now() + 600;
   while (el.isConnected && selectedState(el) === false && Date.now() < deadline) {
-    await performReplayClick(el);
+    await performReplayClick(replayClickTarget(el, payload) ?? el);
     await new Promise((resolve) => window.setTimeout(resolve, 80));
   }
+}
+
+function replayClickTarget(el: HTMLElement, payload: any): HTMLElement | null {
+  if (el instanceof HTMLInputElement && ['radio', 'checkbox'].includes(el.type)) {
+    return choiceClickTarget(el);
+  }
+  if (payload?.clickKind === 'selectable') {
+    const nested = el.querySelector('input[type="radio"],input[type="checkbox"]');
+    if (nested instanceof HTMLInputElement) return choiceClickTarget(nested) ?? el;
+  }
+  return null;
+}
+
+function choiceClickTarget(input: HTMLInputElement): HTMLElement | null {
+  if (input.id) {
+    const label = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
+    if (label instanceof HTMLElement && isVisible(label)) return label;
+  }
+  const wrapped = input.closest('label');
+  if (wrapped instanceof HTMLElement && isVisible(wrapped)) return wrapped;
+  const tile = input.closest('[class*="tile" i],[class*="card" i],[class*="option" i],[role="checkbox"],[role="radio"]');
+  return tile instanceof HTMLElement && isVisible(tile) ? tile : null;
+}
+
+function isVisible(node: HTMLElement): boolean {
+  const rect = node.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const style = getComputedStyle(node);
+  return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
 }
 
 function selectedState(el: HTMLElement): boolean | null {

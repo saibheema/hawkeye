@@ -1784,6 +1784,8 @@ test('live Avis Ford scheduler records through contact screen without booking', 
 
   await frame.locator('.service-tile__label', { hasText: 'Oil Change' }).first().click();
   await target.waitForTimeout(800);
+  await frame.locator('.service-tile__label', { hasText: 'Lights' }).first().click();
+  await target.waitForTimeout(800);
   await frame.getByText('Continue', { exact: true }).click();
   await target.waitForTimeout(2_500);
 
@@ -1859,6 +1861,8 @@ test('live Avis Ford scheduler records and replays same data without booking', a
 
   await frame.locator('.service-tile__label', { hasText: 'Oil Change' }).first().click();
   await target.waitForTimeout(800);
+  await frame.locator('.service-tile__label', { hasText: 'Lights' }).first().click();
+  await target.waitForTimeout(800);
   await frame.getByText('Continue', { exact: true }).click();
   await target.waitForTimeout(2_500);
 
@@ -1912,6 +1916,7 @@ test('live Avis Ford scheduler records and replays same data without booking', a
     return (node.parentElement as HTMLElement | null)?.innerText ?? node.textContent ?? '';
   });
   expect(selectedServiceSummary).toContain('Oil Change');
+  expect(selectedServiceSummary).toContain('Lights');
   expect(selectedServiceSummary).not.toMatch(/The Works/);
 
   await extensionPage.close();

@@ -381,9 +381,10 @@ export async function executeTool(
             async (o: Record<string, any>) => {
               const el = await waitForReplayElement(o, 'click') as HTMLElement | null;
               if (!el) return { ok: false, error: `Element not found in frame: ${describeMissingReplayTarget(o)}` };
-              await performReplayClick(el);
+              const clickTarget = replayClickTarget(el, o) ?? el;
+              await performReplayClick(clickTarget);
               await ensureSelectedState(el, o);
-              return { ok: true, clickedText: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120), href: (el as HTMLAnchorElement).href || null, frameUrl: location.href };
+              return { ok: true, clickedText: (clickTarget.innerText || clickTarget.textContent || el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120), href: (clickTarget as HTMLAnchorElement).href || (el as HTMLAnchorElement).href || null, frameUrl: location.href };
               async function performReplayClick(el: HTMLElement) {
                 el.scrollIntoView?.({ block: 'center', inline: 'center' });
                 await new Promise((resolve) => setTimeout(resolve, 40));
@@ -401,7 +402,7 @@ export async function executeTool(
                   const expected = payload.checked === false ? false : true;
                   const deadline = Date.now() + 600;
                   while (el.isConnected && el.checked !== expected && Date.now() < deadline) {
-                    await performReplayClick(choiceClickTarget(el) ?? el);
+                    await performReplayClick(replayClickTarget(el, payload) ?? el);
                     await new Promise((resolve) => setTimeout(resolve, 80));
                   }
                   if (el.isConnected && el.checked !== expected) {
@@ -416,9 +417,19 @@ export async function executeTool(
                 if (payload.clickKind !== 'selectable') return;
                 const deadline = Date.now() + 600;
                 while (el.isConnected && selectedState(el) === false && Date.now() < deadline) {
-                  await performReplayClick(el);
+                  await performReplayClick(replayClickTarget(el, payload) ?? el);
                   await new Promise((resolve) => setTimeout(resolve, 80));
                 }
+              }
+              function replayClickTarget(el: HTMLElement, payload: Record<string, any>): HTMLElement | null {
+                if (el instanceof HTMLInputElement && ['radio', 'checkbox'].includes(el.type)) {
+                  return choiceClickTarget(el);
+                }
+                if (payload.clickKind === 'selectable') {
+                  const nested = el.querySelector('input[type="radio"],input[type="checkbox"]');
+                  if (nested instanceof HTMLInputElement) return choiceClickTarget(nested) ?? el;
+                }
+                return null;
               }
               function selectedState(el: HTMLElement): boolean | null {
                 const aria = el.getAttribute('aria-selected') ?? el.getAttribute('aria-pressed') ?? el.getAttribute('aria-checked');
@@ -685,9 +696,10 @@ export async function executeTool(
             async (o: Record<string, any>) => {
               const el = await waitForReplayElement(o, 'click') as HTMLElement | null;
               if (!el) return { ok: false, error: `Element not found in iframe: ${describeMissingReplayTarget(o)}` };
-              await performReplayClick(el);
+              const clickTarget = replayClickTarget(el, o) ?? el;
+              await performReplayClick(clickTarget);
               await ensureSelectedState(el, o);
-              return { ok: true, clickedText: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120), href: (el as HTMLAnchorElement).href || null, frameUrl: location.href };
+              return { ok: true, clickedText: (clickTarget.innerText || clickTarget.textContent || el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120), href: (clickTarget as HTMLAnchorElement).href || (el as HTMLAnchorElement).href || null, frameUrl: location.href };
               async function performReplayClick(el: HTMLElement) {
                 el.scrollIntoView?.({ block: 'center', inline: 'center' });
                 await new Promise((resolve) => setTimeout(resolve, 40));
@@ -705,7 +717,7 @@ export async function executeTool(
                   const expected = payload.checked === false ? false : true;
                   const deadline = Date.now() + 600;
                   while (el.isConnected && el.checked !== expected && Date.now() < deadline) {
-                    await performReplayClick(choiceClickTarget(el) ?? el);
+                    await performReplayClick(replayClickTarget(el, payload) ?? el);
                     await new Promise((resolve) => setTimeout(resolve, 80));
                   }
                   if (el.isConnected && el.checked !== expected) {
@@ -720,9 +732,19 @@ export async function executeTool(
                 if (payload.clickKind !== 'selectable') return;
                 const deadline = Date.now() + 600;
                 while (el.isConnected && selectedState(el) === false && Date.now() < deadline) {
-                  await performReplayClick(el);
+                  await performReplayClick(replayClickTarget(el, payload) ?? el);
                   await new Promise((resolve) => setTimeout(resolve, 80));
                 }
+              }
+              function replayClickTarget(el: HTMLElement, payload: Record<string, any>): HTMLElement | null {
+                if (el instanceof HTMLInputElement && ['radio', 'checkbox'].includes(el.type)) {
+                  return choiceClickTarget(el);
+                }
+                if (payload.clickKind === 'selectable') {
+                  const nested = el.querySelector('input[type="radio"],input[type="checkbox"]');
+                  if (nested instanceof HTMLInputElement) return choiceClickTarget(nested) ?? el;
+                }
+                return null;
               }
               function selectedState(el: HTMLElement): boolean | null {
                 const aria = el.getAttribute('aria-selected') ?? el.getAttribute('aria-pressed') ?? el.getAttribute('aria-checked');
