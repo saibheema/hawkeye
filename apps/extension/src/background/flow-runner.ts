@@ -193,6 +193,7 @@ export async function replayFlow(
     let failedTool: string | undefined;
     let error: string | undefined;
     let debug: ReplayDebug | undefined;
+    const pendingScreenState: Array<{ step: FlowStep; args: Record<string, unknown>; stepIndex: number }> = [];
 
     if (startUrl) {
       const nav = await executeTool('navigate', { url: startUrl }, tabId);
@@ -218,6 +219,18 @@ export async function replayFlow(
 
       onProgress({ type: 'step', runIndex: run, total: repeatCount, stepIndex: si, stepTool: step.tool });
 
+      if (isProceedStep(step, args) && pendingScreenState.length > 0) {
+        const ensured = await ensureScreenState(tabId, pendingScreenState, getNetworkActivity);
+        if (!ensured.ok) {
+          ok = false;
+          failedStep = ensured.failedStep ?? si;
+          failedTool = ensured.failedTool ?? 'verify_replay_step';
+          error = ensured.error;
+          debug = await captureReplayDebug(tabId);
+          break;
+        }
+      }
+
       await waitBeforeReplayStep(tabId, step, getNetworkActivity);
       const res = await executeTool(step.tool, args, tabId);
       if (!res.ok) {
@@ -230,6 +243,8 @@ export async function replayFlow(
       }
 
       await waitAfterReplayStep(tabId, step, getNetworkActivity);
+      if (isStatefulStep(step, args)) upsertPendingState(pendingScreenState, { step, args, stepIndex: si });
+      if (isProceedStep(step, args)) pendingScreenState.length = 0;
     }
 
     const result: RunResult = {
@@ -253,6 +268,122 @@ export async function replayFlow(
 
   onProgress({ type: 'all_done', runIndex: repeatCount - 1, total: repeatCount, results });
   return results;
+}
+
+async function ensureScreenState(
+  tabId: number,
+  pending: Array<{ step: FlowStep; args: Record<string, unknown>; stepIndex: number }>,
+  getNetworkActivity?: () => NetworkActivitySnapshot | undefined
+): Promise<{ ok: true } | { ok: false; failedStep?: number; failedTool?: string; error: string }> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const missing: Array<{ step: FlowStep; args: Record<string, unknown>; stepIndex: number; reason?: string }> = [];
+    for (const item of pending) {
+      const verified = await executeTool('verify_replay_step', {
+        stepTool: item.step.tool,
+        stepArgs: item.args,
+      }, tabId);
+      if (!verified.ok) {
+        missing.push({ ...item, reason: verified.error });
+        continue;
+      }
+      const data = verified.data as { verified?: boolean; found?: boolean; reason?: string } | undefined;
+      if (data?.verified === false) missing.push({ ...item, reason: data.reason });
+    }
+    if (missing.length === 0) return { ok: true };
+
+    for (const item of missing) {
+      await waitBeforeReplayStep(tabId, item.step, getNetworkActivity);
+      const res = await executeTool(item.step.tool, item.args, tabId);
+      if (!res.ok) {
+        return {
+          ok: false,
+          failedStep: item.stepIndex,
+          failedTool: item.step.tool,
+          error: `Could not reselect before proceeding: ${res.error ?? item.reason ?? item.step.tool}`,
+        };
+      }
+      await waitAfterReplayStep(tabId, item.step, getNetworkActivity);
+    }
+  }
+
+  const stillMissing: string[] = [];
+  for (const item of pending) {
+    const verified = await executeTool('verify_replay_step', {
+      stepTool: item.step.tool,
+      stepArgs: item.args,
+    }, tabId);
+    const data = verified.data as { verified?: boolean; reason?: string } | undefined;
+    if (!verified.ok || data?.verified === false) {
+      stillMissing.push(describeReplayState(item.step, item.args, data?.reason ?? verified.error));
+    }
+  }
+  if (stillMissing.length === 0) return { ok: true };
+  return {
+    ok: false,
+    failedStep: pending[0]?.stepIndex,
+    failedTool: 'verify_replay_step',
+    error: `Could not confirm screen selections after 3 attempts: ${stillMissing.join('; ')}`,
+  };
+}
+
+function upsertPendingState(
+  pending: Array<{ step: FlowStep; args: Record<string, unknown>; stepIndex: number }>,
+  item: { step: FlowStep; args: Record<string, unknown>; stepIndex: number }
+) {
+  const key = stateKey(item.step, item.args);
+  const index = pending.findIndex((candidate) => stateKey(candidate.step, candidate.args) === key);
+  if (index >= 0) pending[index] = item;
+  else pending.push(item);
+}
+
+function isStatefulStep(step: FlowStep, args: Record<string, unknown>): boolean {
+  if (step.tool === 'type_text' || step.tool === 'select_option') return true;
+  if (step.tool !== 'click') return false;
+  return String(args.inputType ?? '').toLowerCase() === 'radio'
+    || String(args.inputType ?? '').toLowerCase() === 'checkbox'
+    || args.clickKind === 'selectable'
+    || hasRecordedLabel(args, step);
+}
+
+function isProceedStep(step: FlowStep, args: Record<string, unknown>): boolean {
+  if (step.tool !== 'click' && step.tool !== 'trigger_event') return false;
+  const text = searchableText(args, step);
+  if (step.tool === 'trigger_event') {
+    const event = String(args.event ?? '').toLowerCase();
+    if (event === 'submit') return true;
+    if (event === 'keydown' && String(args.key ?? '').toLowerCase() === 'enter') return true;
+  }
+  return /\b(continue|next|save|submit|done|finish|book|reserve|schedule|confirm|search|go)\b/i.test(text);
+}
+
+function hasRecordedLabel(args: Record<string, unknown>, step: FlowStep): boolean {
+  const text = searchableText(args, step);
+  return text.trim().length > 0;
+}
+
+function searchableText(args: Record<string, unknown>, step: FlowStep): string {
+  const candidates = Array.isArray(args.locatorCandidates) ? args.locatorCandidates as Array<Record<string, unknown>> : [];
+  return [
+    args.label,
+    args.text,
+    args.value,
+    step.meta?.label,
+    step.meta?.originalValue,
+    ...candidates.map((candidate) => candidate.value),
+  ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function stateKey(step: FlowStep, args: Record<string, unknown>): string {
+  if (step.tool === 'type_text' || step.tool === 'select_option') {
+    return `${step.tool}:${String(args.selector ?? '')}:${String(args.frameId ?? '')}`;
+  }
+  const label = searchableText(args, step).toLowerCase();
+  return `${step.tool}:${String(args.selector ?? '')}:${String(args.frameId ?? '')}:${String(args.inputType ?? '')}:${String(args.value ?? '')}:${label}`;
+}
+
+function describeReplayState(step: FlowStep, args: Record<string, unknown>, reason?: string): string {
+  const label = searchableText(args, step) || String(args.selector ?? step.tool);
+  return reason ? `${label} (${reason})` : label;
 }
 
 function startUrlForFlow(flow: Flow): string | null {
