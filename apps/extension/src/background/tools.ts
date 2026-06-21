@@ -448,7 +448,7 @@ export async function executeTool(
               }
               function findBySemantic(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
                 const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
-                const selector = kind === 'click' ? 'button,a,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],input[type="radio"],input[type="checkbox"],label,[onclick],[tabindex]' : kind === 'select' ? 'select' : 'input:not([type="hidden"]),textarea';
+                const selector = kind === 'click' ? 'button,a,summary,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],input[type="radio"],input[type="checkbox"],label,[onclick],[jsaction],[aria-expanded],[aria-controls],[data-href],[data-url],[tabindex],[class*="btn" i],[class*="button" i],[class*="link" i],[class*="chip" i]' : kind === 'select' ? 'select' : 'input:not([type="hidden"]),textarea';
                 const elements = Array.from(document.querySelectorAll(selector));
                 for (const candidate of candidates) {
                   const needle = normalize(candidate.value || '');
@@ -474,11 +474,21 @@ export async function executeTool(
                   '[aria-selected]',
                   '[aria-pressed]',
                   '[aria-checked]',
+                  '[aria-expanded]',
+                  '[aria-controls]',
+                  '[jsaction]',
+                  '[data-href]',
+                  '[data-url]',
+                  'summary',
                   'input[type="button"]',
                   'input[type="submit"]',
                   'input[type="reset"]',
                   'label',
                   '[onclick]',
+                  '[class*="btn" i]',
+                  '[class*="button" i]',
+                  '[class*="link" i]',
+                  '[class*="chip" i]',
                   '[tabindex]',
                   '[class*="tile" i]',
                   '[class*="card" i]',
@@ -632,7 +642,7 @@ export async function executeTool(
               }
               function findBySemantic(payload: Record<string, any>, kind: 'click' | 'type' | 'select'): Element | null {
                 const candidates = Array.isArray(payload.locatorCandidates) ? payload.locatorCandidates.filter((c: any) => c.type !== 'css') : [];
-                const selector = kind === 'click' ? 'button,a,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],input[type="radio"],input[type="checkbox"],label,[onclick],[tabindex]' : kind === 'select' ? 'select' : 'input:not([type="hidden"]),textarea';
+                const selector = kind === 'click' ? 'button,a,summary,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],input[type="radio"],input[type="checkbox"],label,[onclick],[jsaction],[aria-expanded],[aria-controls],[data-href],[data-url],[tabindex],[class*="btn" i],[class*="button" i],[class*="link" i],[class*="chip" i]' : kind === 'select' ? 'select' : 'input:not([type="hidden"]),textarea';
                 const elements = Array.from(document.querySelectorAll(selector));
                 for (const candidate of candidates) {
                   const needle = normalize(candidate.value || '');
@@ -658,11 +668,21 @@ export async function executeTool(
                   '[aria-selected]',
                   '[aria-pressed]',
                   '[aria-checked]',
+                  '[aria-expanded]',
+                  '[aria-controls]',
+                  '[jsaction]',
+                  '[data-href]',
+                  '[data-url]',
+                  'summary',
                   'input[type="button"]',
                   'input[type="submit"]',
                   'input[type="reset"]',
                   'label',
                   '[onclick]',
+                  '[class*="btn" i]',
+                  '[class*="button" i]',
+                  '[class*="link" i]',
+                  '[class*="chip" i]',
                   '[tabindex]',
                   '[class*="tile" i]',
                   '[class*="card" i]',
@@ -1406,11 +1426,21 @@ export async function executeTool(
               '[aria-selected]',
               '[aria-pressed]',
               '[aria-checked]',
+              '[aria-expanded]',
+              '[aria-controls]',
+              '[jsaction]',
+              '[data-href]',
+              '[data-url]',
+              'summary',
               'input[type="button"]',
               'input[type="submit"]',
               'input[type="reset"]',
               'label',
               '[onclick]',
+              '[class*="btn" i]',
+              '[class*="button" i]',
+              '[class*="link" i]',
+              '[class*="chip" i]',
               '[tabindex]',
               '[class*="tile" i]',
               '[class*="card" i]',
@@ -1435,7 +1465,7 @@ export async function executeTool(
             const value = normalize(String(candidate.value ?? ''));
             if (!value) return null;
             const selector = targetKind === 'click'
-              ? 'button,a,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],input[type="radio"],input[type="checkbox"],label,[onclick],[tabindex]'
+              ? 'button,a,summary,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],input[type="radio"],input[type="checkbox"],label,[onclick],[jsaction],[aria-expanded],[aria-controls],[data-href],[data-url],[tabindex],[class*="btn" i],[class*="button" i],[class*="link" i],[class*="chip" i]'
               : targetKind === 'select'
                 ? 'select'
                 : 'input:not([type="hidden"]),textarea';
@@ -2612,11 +2642,12 @@ async function injectConfiguredContentScripts(tabId: number): Promise<void> {
   }
 }
 
-function waitForTabLoad(tabId: number): Promise<void> {
+function waitForTabLoad(tabId: number, timeoutMs = 30_000): Promise<void> {
   return new Promise((resolve) => {
+    const startedAt = Date.now();
     const check = () => {
       chrome.tabs.get(tabId, (tab) => {
-        if (tab.status === 'complete') resolve();
+        if (tab.status === 'complete' || Date.now() - startedAt >= timeoutMs) resolve();
         else setTimeout(check, 300);
       });
     };

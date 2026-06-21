@@ -329,6 +329,72 @@ test('side panel record and replay controls target the page tab', async ({ conte
   });
 });
 
+test('replays Google-style jsaction show more controls when selectors drift', async ({ context, extensionId }) => {
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <h1>AI Overview</h1>
+        <div id="overview">Short answer</div>
+        <div
+          id="realShowMore"
+          jsaction="click:showMore"
+          aria-expanded="false"
+          aria-controls="expanded"
+          style="cursor:pointer;border:1px solid #8ab4f8;border-radius:999px;padding:14px 40px;width:420px;text-align:center"
+        >
+          <span>Show more</span>
+        </div>
+        <div id="expanded" hidden>Expanded AI result</div>
+        <script>
+          document.querySelector('#realShowMore').addEventListener('click', (event) => {
+            event.currentTarget.setAttribute('aria-expanded', 'true');
+            document.querySelector('#expanded').hidden = false;
+          });
+        </script>
+      </body>
+    </html>`;
+
+  await withTestServer(html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+    const flow = {
+      id: 'flow_google_show_more',
+      name: 'Google show more',
+      domain: '127.0.0.1',
+      startUrl: baseUrl,
+      createdAt: Date.now(),
+      stepCount: 1,
+      steps: [{
+        tool: 'click',
+        args: {
+          selector: '#oldShowMore',
+          label: 'Show more',
+          text: 'Show more',
+          tagName: 'div',
+          clickKind: 'click',
+          locatorCandidates: [
+            { type: 'css', selector: '#oldShowMore', value: '#oldShowMore' },
+            { type: 'text', value: 'Show more', selector: '#oldShowMore' },
+          ],
+        },
+        meta: { source: 'manual', label: 'Show more' },
+      }],
+    };
+
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results[0].ok).toBe(true);
+    await expect(target.locator('#realShowMore')).toHaveAttribute('aria-expanded', 'true');
+    await expect(target.locator('#expanded')).toBeVisible();
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('records Enter key submissions as replayable steps', async ({ context, extensionId }) => {
   const html = `<!doctype html>
     <html>

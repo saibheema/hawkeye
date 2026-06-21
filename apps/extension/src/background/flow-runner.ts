@@ -17,6 +17,9 @@ type ReplaySettleOptions = {
   domTimeoutMs?: number;
 };
 
+const REPLAY_STEP_TIMEOUT_MS = 45_000;
+const REPLAY_VERIFY_TIMEOUT_MS = 20_000;
+
 // ─── Test data generator ──────────────────────────────────────────────────────
 
 const FIRST_NAMES = ['Alex', 'Jordan', 'Morgan', 'Taylor', 'Casey', 'Riley', 'Drew', 'Quinn', 'Avery', 'Blake'];
@@ -232,7 +235,7 @@ export async function replayFlow(
       }
 
       await waitBeforeReplayStep(tabId, step, getNetworkActivity);
-      const res = await executeTool(step.tool, args, tabId);
+      const res = await executeToolWithTimeout(step.tool, args, tabId, REPLAY_STEP_TIMEOUT_MS);
       if (!res.ok) {
         ok = false;
         failedStep = si;
@@ -278,10 +281,10 @@ async function ensureScreenState(
   for (let attempt = 1; attempt <= 3; attempt++) {
     const missing: Array<{ step: FlowStep; args: Record<string, unknown>; stepIndex: number; reason?: string }> = [];
     for (const item of pending) {
-      const verified = await executeTool('verify_replay_step', {
+      const verified = await executeToolWithTimeout('verify_replay_step', {
         stepTool: item.step.tool,
         stepArgs: item.args,
-      }, tabId);
+      }, tabId, REPLAY_VERIFY_TIMEOUT_MS);
       if (!verified.ok) {
         missing.push({ ...item, reason: verified.error });
         continue;
@@ -293,7 +296,7 @@ async function ensureScreenState(
 
     for (const item of missing) {
       await waitBeforeReplayStep(tabId, item.step, getNetworkActivity);
-      const res = await executeTool(item.step.tool, item.args, tabId);
+      const res = await executeToolWithTimeout(item.step.tool, item.args, tabId, REPLAY_STEP_TIMEOUT_MS);
       if (!res.ok) {
         return {
           ok: false,
@@ -308,10 +311,10 @@ async function ensureScreenState(
 
   const stillMissing: string[] = [];
   for (const item of pending) {
-    const verified = await executeTool('verify_replay_step', {
+    const verified = await executeToolWithTimeout('verify_replay_step', {
       stepTool: item.step.tool,
       stepArgs: item.args,
-    }, tabId);
+    }, tabId, REPLAY_VERIFY_TIMEOUT_MS);
     const data = verified.data as { verified?: boolean; reason?: string } | undefined;
     if (!verified.ok || data?.verified === false) {
       stillMissing.push(describeReplayState(item.step, item.args, data?.reason ?? verified.error));
@@ -324,6 +327,23 @@ async function ensureScreenState(
     failedTool: 'verify_replay_step',
     error: `Could not confirm screen selections after 3 attempts: ${stillMissing.join('; ')}`,
   };
+}
+
+async function executeToolWithTimeout(
+  tool: string,
+  args: Record<string, unknown>,
+  tabId: number,
+  timeoutMs: number
+) {
+  let timeoutId: number | undefined;
+  const timeout = new Promise<Awaited<ReturnType<typeof executeTool>>>((resolve) => {
+    timeoutId = self.setTimeout(() => {
+      resolve({ ok: false, error: `Timed out after ${timeoutMs}ms while running ${tool}` });
+    }, timeoutMs);
+  });
+  const result = await Promise.race([executeTool(tool, args, tabId), timeout]);
+  if (timeoutId !== undefined) self.clearTimeout(timeoutId);
+  return result;
 }
 
 function upsertPendingState(

@@ -308,11 +308,21 @@ function findRecordedClickElement(payload: any): Element | null {
     '[aria-selected]',
     '[aria-pressed]',
     '[aria-checked]',
+    '[aria-expanded]',
+    '[aria-controls]',
+    '[jsaction]',
+    '[data-href]',
+    '[data-url]',
+    'summary',
     'input[type="button"]',
     'input[type="submit"]',
     'input[type="reset"]',
     'label',
     '[onclick]',
+    '[class*="btn" i]',
+    '[class*="button" i]',
+    '[class*="link" i]',
+    '[class*="chip" i]',
     '[tabindex]',
     '[class*="tile" i]',
     '[class*="card" i]',
@@ -389,7 +399,7 @@ function findBySemanticCandidate(candidate: LocatorCandidate, kind: 'click' | 't
   const value = normalize(candidate.value ?? '');
   if (!value) return null;
   const selector = kind === 'click'
-    ? 'button,a,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],input[type="radio"],input[type="checkbox"],label,[onclick],[tabindex]'
+    ? 'button,a,summary,[role="button"],[role="option"],[role="checkbox"],[role="radio"],input[type="button"],input[type="submit"],input[type="reset"],input[type="radio"],input[type="checkbox"],label,[onclick],[jsaction],[aria-expanded],[aria-controls],[data-href],[data-url],[tabindex],[class*="btn" i],[class*="button" i],[class*="link" i],[class*="chip" i]'
     : kind === 'select'
       ? 'select'
       : 'input:not([type="hidden"]),textarea';
