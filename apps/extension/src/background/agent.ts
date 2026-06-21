@@ -55,6 +55,7 @@ Rules:
 2. For color/style changes by visible text ("change Welcome color to red", "make New Customer button blue"), prefer style_by_text.
 3. For placeholder changes on inputs ("add placeholder for phone number", "set email placeholder to X"), prefer set_placeholder_by_label.
 4. For adding a new dropdown/select option ("add ROD as another option in Make field"), use add_dropdown_option.
+5. For adding new UI elements/fields/textboxes/buttons near an existing visible label ("add a text box after Mileage"), use insert_html with label and position. Do not require read_page for this.
 4. For click / fill / navigate tasks, read_page ONCE to find the right selector, then act. Do NOT call read_page more than twice.
 3. After reading, immediately execute the required tool(s). Do not pause or ask.
 4. Use CSS selectors to interact with elements.
@@ -70,6 +71,7 @@ Tool selection — pick the right one immediately:
 - Change styles / colors / fonts → insert_css or set_style
 - Change an input placeholder by label/nearby text → set_placeholder_by_label
 - Add an option to a dropdown/select by label → add_dropdown_option
+- Add a new form field/textbox/button/section before or after visible text → insert_html with label
 - Re-theme with CSS variables → set_css_var
 - Change icon-only controls by name ("change + icon to X", "replace search icon with close") → replace_icon
 - Change a picked/selected SVG or icon element to another icon → replace_selected_icon
@@ -111,6 +113,8 @@ Visual / UI changes — choose the right tool:
   Example: dom_op({ op: "set_attr", selector: "a.logo", attr: "href", value: "https://example.com" })
 - **insert_html**: Inject new HTML nodes before/after/inside an existing element.
   Example: insert_html({ selector: "nav", position: "beforeend", html: "<a href='/new'>New Page</a>" })
+  Example: insert_html({ label: "Mileage", position: "afterend", html: "<div style='margin-top:16px'><label style='display:block;margin-bottom:6px'>Engine type</label><input placeholder='Gas Engine' style='width:100%;box-sizing:border-box;padding:10px;border:1px solid #999;border-radius:4px'/></div>" })
+  Use label when the user identifies a nearby visible field/label instead of a CSS selector. Works across iframes and persists until Reset.
 - **replace_text**: Find and replace visible text anywhere on the page.
   Example: replace_text({ find: "Add to Cart", replace: "Buy Now" })
 - **trigger_event**: Fire a DOM event to activate reactive UI behaviour.

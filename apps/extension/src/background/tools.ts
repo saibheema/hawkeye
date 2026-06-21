@@ -239,11 +239,12 @@ export const TOOLS: LLMTool[] = [
   },
   {
     name: 'insert_html',
-    description: 'Insert new HTML content relative to a target element. Use to add banners, badges, tooltips, buttons, or any new DOM nodes without replacing existing content.',
+    description: 'Insert new HTML content relative to a target element. Use to add banners, badges, tooltips, buttons, form fields, text boxes, or any new DOM nodes without replacing existing content. Can target by selector or by nearby visible label text across page and iframes.',
     parameters: {
       type: 'object',
       properties: {
-        selector: { type: 'string', description: 'CSS selector for the reference element' },
+        selector: { type: 'string', description: 'CSS selector for the reference element. Optional when label is provided.' },
+        label: { type: 'string', description: 'Visible label/nearby text identifying the reference element, e.g. "Mileage". Used when selector is unknown.' },
         position: {
           type: 'string',
           enum: ['beforebegin', 'afterbegin', 'beforeend', 'afterend'],
@@ -251,7 +252,7 @@ export const TOOLS: LLMTool[] = [
         },
         html: { type: 'string', description: 'HTML string to insert. Example: "<span style=\'color:green\'>✓ Verified</span>"' },
       },
-      required: ['selector', 'position', 'html'],
+      required: ['position', 'html'],
     },
   },
   {
@@ -1735,22 +1736,125 @@ export async function executeTool(
       }
 
       case 'insert_html': {
-        type InsertHtmlArgs = { selector: string; position: InsertPosition; html: string };
+        type InsertHtmlArgs = { selector?: string; label?: string; position: InsertPosition; html: string };
         const a = args as unknown as InsertHtmlArgs;
         const res = await chrome.scripting.executeScript({
           target: { tabId, allFrames: true },
           world: 'MAIN',
           func: (o: InsertHtmlArgs) => {
-            const els = Array.from(document.querySelectorAll(o.selector));
-            for (const el of els) el.insertAdjacentHTML(o.position, o.html);
-            return { ok: true, count: els.length, frameUrl: location.href };
+            const id = stableInsertId(o);
+            if (document.querySelector(`[data-hawkeye-insert="${CSS.escape(id)}"]`)) {
+              return { ok: true as const, count: 1, frameUrl: location.href, skippedDuplicate: true };
+            }
+            const els = findTargets(o);
+            for (const el of els) insertMarkedHtml(el, o.position, o.html, id);
+            return { ok: true as const, count: els.length, frameUrl: location.href };
+
+            function findTargets(payload: InsertHtmlArgs): Element[] {
+              const selector = String(payload.selector ?? '').trim();
+              if (selector) {
+                try {
+                  const matches = Array.from(document.querySelectorAll(selector));
+                  if (matches.length > 0) return matches;
+                } catch {}
+              }
+              const needle = normalize(String(payload.label ?? ''));
+              if (!needle) return [];
+              const candidates = Array.from(document.querySelectorAll([
+                'input:not([type="hidden"])',
+                'textarea',
+                'select',
+                'button',
+                'label',
+                '[aria-label]',
+                '[placeholder]',
+                '[name]',
+                '[id]',
+                '[role="button"]',
+                '[role="textbox"]',
+                '[role="combobox"]',
+              ].join(','))).filter((el) => el instanceof HTMLElement);
+              const ranked = candidates
+                .map((el) => ({ el, text: normalize([labelFor(el), textFor(el), attrText(el), (el as HTMLInputElement).name, el.id].filter(Boolean).join(' ')) }))
+                .filter((item) => item.text);
+              const exact = ranked.find((item) => item.text === needle);
+              if (exact) return [referenceTarget(exact.el)];
+              const contains = ranked
+                .filter((item) => item.text.includes(needle))
+                .sort((a, b) => a.text.length - b.text.length)[0];
+              return contains ? [referenceTarget(contains.el)] : [];
+            }
+
+            function referenceTarget(el: Element): Element {
+              if (el instanceof HTMLLabelElement && el.htmlFor) {
+                const input = document.getElementById(el.htmlFor);
+                if (input) return input;
+              }
+              return el;
+            }
+
+            function insertMarkedHtml(target: Element, position: InsertPosition, html: string, id: string) {
+              const template = document.createElement('template');
+              template.innerHTML = html;
+              const nodes = Array.from(template.content.childNodes);
+              if (nodes.length === 0) return;
+              for (const node of nodes) {
+                if (node instanceof Element) node.setAttribute('data-hawkeye-insert', id);
+              }
+              const fragment = document.createDocumentFragment();
+              for (const node of nodes) fragment.appendChild(node);
+              switch (position) {
+                case 'beforebegin':
+                  target.parentNode?.insertBefore(fragment, target);
+                  break;
+                case 'afterbegin':
+                  target.insertBefore(fragment, target.firstChild);
+                  break;
+                case 'beforeend':
+                  target.appendChild(fragment);
+                  break;
+                case 'afterend':
+                  target.parentNode?.insertBefore(fragment, target.nextSibling);
+                  break;
+              }
+            }
+
+            function stableInsertId(payload: InsertHtmlArgs): string {
+              const value = [payload.selector, payload.label, payload.position, payload.html].filter(Boolean).join('|');
+              let hash = 0;
+              for (let i = 0; i < value.length; i++) hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+              return `insert_${Math.abs(hash)}`;
+            }
+
+            function labelFor(el: Element) {
+              const parts: string[] = [];
+              if (el.id) parts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() ?? '');
+              parts.push(el.closest('label')?.textContent?.trim() ?? '');
+              parts.push((el.previousElementSibling as HTMLElement | null)?.innerText?.trim() ?? '');
+              parts.push((el.parentElement as HTMLElement | null)?.innerText?.trim() ?? '');
+              return parts.filter(Boolean).join(' ');
+            }
+
+            function textFor(el: Element) {
+              if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return '';
+              return (el as HTMLElement).innerText ?? el.textContent ?? '';
+            }
+
+            function attrText(el: Element) {
+              return [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder'), el.getAttribute('name'), el.getAttribute('role')].filter(Boolean).join(' ');
+            }
+
+            function normalize(value: string) {
+              return value.replace(/\s+/g, ' ').trim().toLowerCase();
+            }
           },
           args: [a],
         });
         const failed = res.find((frameResult) => frameResult.result && !(frameResult.result as any).ok);
         if (failed?.result && !(failed.result as any).ok) return { ok: false, error: (failed.result as any).error };
         const insertedCount = res.reduce((sum, frameResult) => sum + ((frameResult.result as any)?.count ?? 0), 0);
-        if (insertedCount === 0) return { ok: false, error: `No elements match selector: ${a.selector}` };
+        if (insertedCount === 0) return { ok: false, error: `No elements match selector or label: ${a.selector ?? a.label ?? ''}` };
+        await persistDomMutation(tabId, 'insert_html', a as unknown as Record<string, unknown>, res);
         return { ok: true, data: { inserted: true, insertedCount } };
       }
 

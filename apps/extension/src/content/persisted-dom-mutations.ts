@@ -70,6 +70,9 @@ function applyMutation(mutation: PersistedDomMutation) {
     case 'set_placeholder_by_label':
       applyPlaceholderByLabel(mutation.args);
       break;
+    case 'insert_html':
+      applyInsertHtml(mutation.args);
+      break;
     case 'add_dropdown_option':
       applyDropdownOption(mutation.args);
       break;
@@ -86,6 +89,112 @@ function applyMutation(mutation: PersistedDomMutation) {
       applyBackgroundImage(mutation.args);
       break;
   }
+}
+
+function applyInsertHtml(args: Record<string, unknown>) {
+  const html = String(args.html ?? '');
+  const position = String(args.position ?? 'afterend') as InsertPosition;
+  if (!html || !['beforebegin', 'afterbegin', 'beforeend', 'afterend'].includes(position)) return;
+  const id = stableInsertId(args);
+  if (document.querySelector(`[data-hawkeye-insert="${CSS.escape(id)}"]`)) return;
+
+  const targets = findInsertTargets(args);
+  for (const target of targets) insertMarkedHtml(target, position, html, id);
+}
+
+function findInsertTargets(args: Record<string, unknown>): Element[] {
+  const selector = String(args.selector ?? '').trim();
+  if (selector) {
+    try {
+      const matches = Array.from(document.querySelectorAll(selector));
+      if (matches.length > 0) return matches;
+    } catch {}
+  }
+
+  const needle = normalize(String(args.label ?? ''));
+  if (!needle) return [];
+  const candidates = Array.from(document.querySelectorAll([
+    'input:not([type="hidden"])',
+    'textarea',
+    'select',
+    'button',
+    'label',
+    '[aria-label]',
+    '[placeholder]',
+    '[name]',
+    '[id]',
+    '[role="button"]',
+    '[role="textbox"]',
+    '[role="combobox"]',
+  ].join(','))).filter((el) => el instanceof HTMLElement);
+  const ranked = candidates
+    .map((el) => ({ el, text: normalize([labelForInsert(el), textForInsert(el), attrTextInsert(el), (el as HTMLInputElement).name, el.id].filter(Boolean).join(' ')) }))
+    .filter((item) => item.text);
+  const exact = ranked.find((item) => item.text === needle);
+  if (exact) return [referenceInsertTarget(exact.el)];
+  const contains = ranked
+    .filter((item) => item.text.includes(needle))
+    .sort((a, b) => a.text.length - b.text.length)[0];
+  return contains ? [referenceInsertTarget(contains.el)] : [];
+}
+
+function referenceInsertTarget(el: Element): Element {
+  if (el instanceof HTMLLabelElement && el.htmlFor) {
+    const input = document.getElementById(el.htmlFor);
+    if (input) return input;
+  }
+  return el;
+}
+
+function insertMarkedHtml(target: Element, position: InsertPosition, html: string, id: string) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const nodes = Array.from(template.content.childNodes);
+  if (nodes.length === 0) return;
+  for (const node of nodes) {
+    if (node instanceof Element) node.setAttribute('data-hawkeye-insert', id);
+  }
+  const fragment = document.createDocumentFragment();
+  for (const node of nodes) fragment.appendChild(node);
+  switch (position) {
+    case 'beforebegin':
+      target.parentNode?.insertBefore(fragment, target);
+      break;
+    case 'afterbegin':
+      target.insertBefore(fragment, target.firstChild);
+      break;
+    case 'beforeend':
+      target.appendChild(fragment);
+      break;
+    case 'afterend':
+      target.parentNode?.insertBefore(fragment, target.nextSibling);
+      break;
+  }
+}
+
+function stableInsertId(args: Record<string, unknown>): string {
+  const value = [args.selector, args.label, args.position, args.html].filter(Boolean).join('|');
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  return `insert_${Math.abs(hash)}`;
+}
+
+function labelForInsert(el: Element) {
+  const parts: string[] = [];
+  if (el.id) parts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() ?? '');
+  parts.push(el.closest('label')?.textContent?.trim() ?? '');
+  parts.push((el.previousElementSibling as HTMLElement | null)?.innerText?.trim() ?? '');
+  parts.push((el.parentElement as HTMLElement | null)?.innerText?.trim() ?? '');
+  return parts.filter(Boolean).join(' ');
+}
+
+function textForInsert(el: Element) {
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return '';
+  return (el as HTMLElement).innerText ?? el.textContent ?? '';
+}
+
+function attrTextInsert(el: Element) {
+  return [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder'), el.getAttribute('name'), el.getAttribute('role')].filter(Boolean).join(' ');
 }
 
 function applyDomOp(args: Record<string, unknown>) {
