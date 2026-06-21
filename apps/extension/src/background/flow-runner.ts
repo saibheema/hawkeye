@@ -241,12 +241,25 @@ export async function replayFlow(
       let res = await executeToolWithTimeout(step.tool, args, tabId, REPLAY_STEP_TIMEOUT_MS);
       if (!res.ok && lastProceed && lastProceed.stepIndex < si && isMissingReplayTargetError(res.error) && !retriedProceedBeforeStep.has(si)) {
         retriedProceedBeforeStep.add(si);
+
         await waitBeforeReplayStep(tabId, lastProceed.step, lastProceed.args, getNetworkActivity);
         const proceedRetry = await executeToolWithTimeout(lastProceed.step.tool, lastProceed.args, tabId, REPLAY_STEP_TIMEOUT_MS);
         if (proceedRetry.ok) {
           await waitAfterReplayStep(tabId, lastProceed.step, lastProceed.args, getNetworkActivity);
           await waitBeforeReplayStep(tabId, step, args, getNetworkActivity);
           res = await executeToolWithTimeout(step.tool, args, tabId, REPLAY_STEP_TIMEOUT_MS);
+        }
+
+        if (!res.ok && isMissingReplayTargetError(res.error)) {
+          for (const proceedArgs of semanticProceedFallbacks(lastProceed.args, args)) {
+            await waitBeforeReplayStep(tabId, lastProceed.step, proceedArgs, getNetworkActivity);
+            const semanticProceed = await executeToolWithTimeout('click', proceedArgs, tabId, REPLAY_STEP_TIMEOUT_MS);
+            if (!semanticProceed.ok) continue;
+            await waitAfterReplayStep(tabId, lastProceed.step, proceedArgs, getNetworkActivity);
+            await waitBeforeReplayStep(tabId, step, args, getNetworkActivity);
+            res = await executeToolWithTimeout(step.tool, args, tabId, REPLAY_STEP_TIMEOUT_MS);
+            if (res.ok || !isMissingReplayTargetError(res.error)) break;
+          }
         }
       }
       if (!res.ok) {
@@ -364,6 +377,42 @@ async function executeToolWithTimeout(
 
 function isMissingReplayTargetError(error?: string): boolean {
   return /\b(?:element|input|select)\s+not\s+found\b/i.test(String(error ?? ''));
+}
+
+function semanticProceedFallbacks(
+  lastProceedArgs: Record<string, unknown>,
+  missingStepArgs: Record<string, unknown>
+): Record<string, unknown>[] {
+  const frameId = typeof lastProceedArgs.frameId === 'number'
+    ? lastProceedArgs.frameId
+    : typeof missingStepArgs.frameId === 'number'
+      ? missingStepArgs.frameId
+      : undefined;
+  const frameUrl = typeof lastProceedArgs.frameUrl === 'string'
+    ? lastProceedArgs.frameUrl
+    : typeof missingStepArgs.frameUrl === 'string'
+      ? missingStepArgs.frameUrl
+      : undefined;
+  const iframeSelector = typeof lastProceedArgs.iframe_selector === 'string'
+    ? lastProceedArgs.iframe_selector
+    : typeof missingStepArgs.iframe_selector === 'string'
+      ? missingStepArgs.iframe_selector
+      : undefined;
+
+  return ['Continue', 'Next', 'Save', 'Done']
+    .filter((label, index, labels) => labels.indexOf(label) === index)
+    .map((label) => ({
+      ...(frameId !== undefined ? { frameId } : {}),
+      ...(frameUrl ? { frameUrl } : {}),
+      ...(iframeSelector ? { iframe_selector: iframeSelector } : {}),
+      label,
+      text: label,
+      locatorCandidates: [
+        { type: 'text', value: label },
+        { type: 'aria', value: label },
+        { type: 'role', value: 'button' },
+      ],
+    }));
 }
 
 function upsertPendingState(
