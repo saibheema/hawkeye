@@ -93,7 +93,7 @@ async function handleContentMessage(
     case 'DOM_CLICK': {
       const el = await waitForElement(p, 'click') as HTMLElement | null;
       if (el) {
-        await performReplayClick(replayClickTarget(el, p) ?? el);
+        await performReplayClick(el);
         await ensureSelectedState(el, p);
         sendResponse({ ok: true, selector: selectorForResponse(el, p?.selector) });
       } else {
@@ -206,48 +206,27 @@ async function performReplayClick(el: HTMLElement): Promise<void> {
 async function ensureSelectedState(el: HTMLElement, payload: any): Promise<void> {
   if (el instanceof HTMLInputElement && ['radio', 'checkbox'].includes(el.type)) {
     const expected = payload?.checked === false ? false : true;
-    const deadline = Date.now() + 600;
+    const deadline = Date.now() + 1200;
     while (el.isConnected && el.checked !== expected && Date.now() < deadline) {
-      await performReplayClick(replayClickTarget(el, payload) ?? el);
+      await performReplayClick(el);
       await new Promise((resolve) => window.setTimeout(resolve, 80));
+    }
+    if (el.isConnected && el.checked !== expected) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked')?.set;
+      if (setter) setter.call(el, expected);
+      else el.checked = expected;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
     }
     return;
   }
   if (payload?.clickKind !== 'selectable') return;
-  const deadline = Date.now() + 600;
+  const deadline = Date.now() + 1200;
   while (el.isConnected && selectedState(el) === false && Date.now() < deadline) {
-    await performReplayClick(replayClickTarget(el, payload) ?? el);
+    const target = choiceClickTarget(el) ?? el;
+    await performReplayClick(target);
     await new Promise((resolve) => window.setTimeout(resolve, 80));
   }
-}
-
-function replayClickTarget(el: HTMLElement, payload: any): HTMLElement | null {
-  if (el instanceof HTMLInputElement && ['radio', 'checkbox'].includes(el.type)) {
-    return choiceClickTarget(el);
-  }
-  if (payload?.clickKind === 'selectable') {
-    const nested = el.querySelector('input[type="radio"],input[type="checkbox"]');
-    if (nested instanceof HTMLInputElement) return choiceClickTarget(nested) ?? el;
-  }
-  return null;
-}
-
-function choiceClickTarget(input: HTMLInputElement): HTMLElement | null {
-  if (input.id) {
-    const label = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
-    if (label instanceof HTMLElement && isVisible(label)) return label;
-  }
-  const wrapped = input.closest('label');
-  if (wrapped instanceof HTMLElement && isVisible(wrapped)) return wrapped;
-  const tile = input.closest('[class*="tile" i],[class*="card" i],[class*="option" i],[role="checkbox"],[role="radio"]');
-  return tile instanceof HTMLElement && isVisible(tile) ? tile : null;
-}
-
-function isVisible(node: HTMLElement): boolean {
-  const rect = node.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) return false;
-  const style = getComputedStyle(node);
-  return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
 }
 
 function selectedState(el: HTMLElement): boolean | null {
@@ -261,7 +240,7 @@ function selectedState(el: HTMLElement): boolean | null {
   if (/\b(unselected|inactive|disabled)\b/.test(stateText)) return false;
   const checked = el.querySelector('input[type="radio"]:checked,input[type="checkbox"]:checked');
   if (checked) return true;
-  return null;
+  return false;
 }
 
 function findOption(el: HTMLSelectElement, desiredValue: string): HTMLOptionElement | null {
@@ -291,7 +270,6 @@ function findElement(payload: any, kind: 'click' | 'type' | 'select'): Element |
   if (kind === 'click') {
     const choice = findChoiceElement(payload);
     if (choice) return choice;
-    if (payload?.clickKind === 'selectable') return null;
     const semantic = findRecordedClickElement(payload);
     if (semantic) return semantic;
   }
@@ -387,86 +365,121 @@ function findChoiceElement(payload: any): Element | null {
   const candidates = locatorCandidates(payload);
   const inputType = String(payload?.inputType ?? candidates.find((candidate) => candidate.inputType)?.inputType ?? '').toLowerCase();
   const selectorText = String(payload?.selector ?? '').toLowerCase();
-  const isChoice = inputType === 'radio' || inputType === 'checkbox' || payload?.clickKind === 'selectable' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
+  const isChoice = inputType === 'radio' || inputType === 'checkbox' || /input\[type=["']?(?:radio|checkbox)/.test(selectorText);
   if (!isChoice) return null;
-
-  const labelNeedles = [
-    payload?.choiceLabel,
-    payload?.label,
-    payload?.text,
-    ...candidates.filter((candidate) => ['label', 'text', 'aria'].includes(candidate.type)).map((candidate) => candidate.value),
-  ].map((value) => normalize(String(value ?? ''))).filter(Boolean);
 
   const forId = String(payload?.forId ?? '');
   if (forId) {
     const control = document.getElementById(forId);
-    if (control && matchesKind(control, 'click') && choiceMatches(control, payload) && matchesChoiceNeedle(control, labelNeedles, false)) return control;
+    if (control && isChoiceControl(control)) return control;
     const label = document.querySelector(`label[for="${CSS.escape(forId)}"]`);
-    if (label && matchesKind(label, 'click') && choiceMatches(label, payload) && matchesChoiceNeedle(label, labelNeedles, false)) return label;
+    if (label && isChoiceControl(label)) return label;
   }
 
-  const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],[role="option"],label,[class*="tile" i],[class*="card" i],[class*="option" i],[class*="choice" i],[class*="service" i]'));
-
-  for (const needle of labelNeedles) {
-    const exact = elements.find((el) => choiceMatches(el, payload) && normalize(choiceLabelFor(el)) === needle);
-    if (exact) return exact;
+  const selectorCandidates = [
+    payload?.selector,
+    ...locatorCandidates(payload).filter((candidate) => candidate.type === 'css').map((candidate) => candidate.selector || candidate.value || ''),
+  ].filter(Boolean);
+  for (const selector of selectorCandidates) {
+    try {
+      const direct = document.querySelector(selector);
+      if (direct && isChoiceControl(direct)) return direct;
+    } catch {}
   }
-  for (const needle of labelNeedles) {
-    const match = elements.find((el) => choiceMatches(el, payload) && normalize([choiceLabelFor(el), attrText(el), (el as HTMLInputElement).value, el.id].filter(Boolean).join(' ')).includes(needle));
-    if (match) return match;
+
+  const elements = Array.from(document.querySelectorAll('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]')).filter(isChoiceControl);
+  const nameFromPayload = String(payload?.name ?? payload?.choiceGroup ?? candidates.find((candidate) => candidate.type === 'name')?.value ?? '').trim();
+  const choiceIndex = parseInt(String(payload?.choiceIndex ?? ''), 10);
+
+  const byName = nameFromPayload
+    ? elements.filter((el) => {
+      if (!(el instanceof HTMLInputElement) || !el.name) return false;
+      return normalize(el.name) === normalize(nameFromPayload);
+    })
+    : [];
+  if (byName.length > 0 && Number.isFinite(choiceIndex) && choiceIndex >= 0 && choiceIndex < byName.length) return byName[choiceIndex];
+  if (byName.length === 1) return byName[0];
+
+  const typeSafeElements = elements.filter((el) => {
+    if (!(el instanceof HTMLInputElement) || !inputType) return true;
+    return el.type === inputType || (el.getAttribute('type') ?? '').toLowerCase() === inputType;
+  });
+  if (Number.isFinite(choiceIndex) && choiceIndex >= 0 && choiceIndex < typeSafeElements.length) return typeSafeElements[choiceIndex];
+
+  const labelNeedles = [
+    payload?.label,
+    ...candidates.filter((candidate) => ['label', 'text', 'aria'].includes(candidate.type)).map((candidate) => candidate.value),
+    payload?.name,
+  ].map((value) => normalize(String(value ?? ''))).filter(Boolean);
+  if (labelNeedles.length > 0) {
+    const choices = rankChoiceMatches(typeSafeElements, labelNeedles, nameFromPayload, choiceIndex, payload?.value);
+    if (choices) return choices;
   }
 
   const desiredValue = normalize(String(payload?.value ?? ''));
   if (desiredValue && desiredValue !== 'on') {
-    return elements.find((el) => el instanceof HTMLInputElement && choiceMatches(el, payload) && normalize(el.value) === desiredValue) ?? null;
+    return elements.find((el) => el instanceof HTMLInputElement && normalize(el.value) === desiredValue) ?? null;
   }
   return null;
 }
 
-function matchesChoiceNeedle(el: Element, needles: string[], allowContains: boolean): boolean {
-  if (needles.length === 0) return true;
-  const label = normalize(choiceLabelFor(el));
-  return needles.some((needle) => label === needle || (allowContains && needle.length > 2 && label.includes(needle)));
+function rankChoiceMatches(
+  elements: Element[],
+  labelNeedles: string[],
+  nameFromPayload: string,
+  choiceIndex: number,
+  desiredValueRaw: any
+): Element | null {
+  const normalizedName = normalize(nameFromPayload || '');
+  const desiredValue = normalize(String(desiredValueRaw ?? ''));
+  const scored = elements
+    .map((el, index) => {
+      const hay = normalize([choiceLabel(el), textFor(el), attrText(el), (el as HTMLInputElement).value, el.id].filter(Boolean).join(' '));
+      let score = 0;
+      for (const needle of labelNeedles) {
+        if (!needle) continue;
+        if (hay === needle) score += 120;
+        if (hay.includes(needle)) score += Math.max(8, needle.length);
+      }
+      if (normalizedName && el instanceof HTMLInputElement && normalize(el.name) === normalizedName) {
+        score += 100;
+      }
+      const candidateValue = normalize((el as HTMLInputElement).getAttribute?.('value') ?? '');
+      if (desiredValue && candidateValue === desiredValue) score += 80;
+      if (choiceIndex >= 0 && Number.isFinite(choiceIndex) && candidateValue && candidateValue !== 'on') {
+        score += 40;
+      }
+      return { el, score, index };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  return scored[0]?.el ?? null;
 }
 
-function choiceMatches(el: Element, payload: any): boolean {
-  const expectedType = String(payload?.inputType ?? '').toLowerCase();
-  if (expectedType && el instanceof HTMLInputElement && el.type !== expectedType) return false;
-  const expectedName = normalize(String(payload?.name ?? payload?.choiceGroup ?? ''));
-  if (expectedName && el instanceof HTMLInputElement) {
-    const actualName = normalize(el.name || groupLabelFor(el));
-    if (actualName && actualName !== expectedName && !actualName.includes(expectedName) && !expectedName.includes(actualName)) return false;
-  }
-  return true;
+function isChoiceControl(candidate: Element): candidate is HTMLElement {
+  if (candidate instanceof HTMLInputElement) return ['radio', 'checkbox'].includes(candidate.type);
+  if (!(candidate instanceof HTMLElement)) return false;
+  const role = (candidate.getAttribute('role') || '').toLowerCase();
+  return role === 'radio' || role === 'checkbox';
 }
 
-function choiceLabelFor(el: Element): string {
-  if (el instanceof HTMLInputElement && el.id) {
-    const labelled = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-    if (labelled?.textContent?.trim()) return labelled.textContent.trim();
+function choiceClickTarget(control: Element): HTMLElement | null {
+  if (!(control instanceof HTMLElement)) return null;
+  if (control instanceof HTMLInputElement && control.id) {
+    const label = document.querySelector(`label[for="${CSS.escape(control.id)}"]`);
+    if (label instanceof HTMLElement && isVisible(label)) return label;
   }
-  const closestLabel = el.closest('label')?.textContent?.trim();
-  if (closestLabel) return closestLabel;
-  const aria = el.getAttribute('aria-label') ?? el.getAttribute('title') ?? '';
-  if (aria.trim()) return aria.trim();
-  const directText = textFor(el).trim();
-  if (directText) return directText;
-  const localChoice = el.closest('[role="radio"],[role="checkbox"],[role="option"],[class*="tile" i],[class*="card" i],[class*="option" i]');
-  if (localChoice instanceof HTMLElement && localChoice !== el) {
-    const text = localChoice.innerText?.trim();
-    if (text) return text;
-  }
-  return [textFor(el), attrText(el)].filter(Boolean).join(' ');
+  const wrapped = control.closest('label');
+  if (wrapped instanceof HTMLElement && isVisible(wrapped)) return wrapped;
+  const tile = control.closest('[class*="tile" i],[class*="card" i],[class*="option" i],[role="checkbox"],[role="radio"]');
+  return tile instanceof HTMLElement && isVisible(tile) ? tile : control;
 }
 
-function groupLabelFor(el: Element): string {
-  const fieldset = el.closest('fieldset');
-  const legend = fieldset?.querySelector('legend')?.textContent?.trim();
-  if (legend) return legend;
-  const group = el.closest('[role="radiogroup"],[role="group"],[aria-labelledby]');
-  const labelledBy = group?.getAttribute('aria-labelledby');
-  if (!labelledBy) return '';
-  return labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.textContent?.trim() ?? '').filter(Boolean).join(' ');
+function isVisible(node: HTMLElement): boolean {
+  const rect = node.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const style = getComputedStyle(node);
+  return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
 }
 
 function locatorCandidates(payload: any): LocatorCandidate[] {

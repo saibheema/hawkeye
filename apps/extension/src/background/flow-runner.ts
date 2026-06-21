@@ -531,25 +531,31 @@ function stateKey(step: FlowStep, args: Record<string, unknown>): string {
   if (step.tool === 'type_text' || step.tool === 'select_option') {
     return `${step.tool}:${String(args.selector ?? '')}:${String(args.frameId ?? '')}`;
   }
-  if (step.tool === 'click' && isRadioChoice(args)) {
+  if (step.tool === 'click' && isChoiceSelection(args)) {
     const selector = String(args.selector ?? '');
-    const group = String(args.name ?? selector.match(/\bname=["']?([^"'\]]+)/i)?.[1] ?? selector.replace(/\[value=["']?[^"'\]]+["']?\]/gi, ''));
-    return `${step.tool}:radio:${String(args.frameId ?? '')}:${group.toLowerCase()}`;
+    const group = String((args as any).choiceGroup ?? args.name ?? selector.match(/\bname=["']?([^"'\]]+)/i)?.[1] ?? selector.replace(/\[value=["']?[^"'\]]+["']?\]/gi, ''));
+    const choiceIndex = Number.isFinite(Number(args.choiceIndex)) ? String(args.choiceIndex) : '';
+    const label = String(args.label ?? args.text ?? '').toLowerCase();
+    return `${step.tool}:choice:${String(args.frameId ?? '')}:${String(args.inputType ?? '')}:${group.toLowerCase()}:${choiceIndex}:${label}`;
   }
   const label = searchableText(args, step).toLowerCase();
   return `${step.tool}:${String(args.selector ?? '')}:${String(args.frameId ?? '')}:${String(args.inputType ?? '')}:${String(args.value ?? '')}:${label}`;
 }
 
-function isRadioChoice(args: Record<string, unknown>): boolean {
+function isChoiceSelection(args: Record<string, unknown>): boolean {
   const inputType = String(args.inputType ?? '').toLowerCase();
   const selector = String(args.selector ?? '').toLowerCase();
   const candidates = Array.isArray(args.locatorCandidates) ? args.locatorCandidates as Array<Record<string, unknown>> : [];
   return inputType === 'radio'
+    || inputType === 'checkbox'
     || /input\[type=["']?radio/.test(selector)
+    || /input\[type=["']?checkbox/.test(selector)
     || candidates.some((candidate) => {
       const candidateInputType = String(candidate.inputType ?? '').toLowerCase();
       const candidateSelector = String(candidate.selector ?? candidate.value ?? '').toLowerCase();
-      return candidateInputType === 'radio' || /input\[type=["']?radio/.test(candidateSelector);
+      return candidateInputType === 'radio' || candidateInputType === 'checkbox'
+        || /input\[type=["']?radio/.test(candidateSelector)
+        || /input\[type=["']?checkbox/.test(candidateSelector);
     });
 }
 

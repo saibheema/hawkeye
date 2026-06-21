@@ -412,16 +412,23 @@ function clickStateArgs(el: Element): Record<string, unknown> {
   }
   if (choiceInput && ['radio', 'checkbox'].includes(choiceInput.type)) {
     args.inputType = choiceInput.type;
-    args.choiceLabel = label;
-    args.choiceGroup = choiceInput.name || groupLabelFor(choiceInput);
-    args.forId = choiceInput.id || args.forId;
-    args.name = choiceInput.name;
-    args.inputId = choiceInput.id;
     args.value = choiceInput.value;
+    if (choiceInput.name) args.name = choiceInput.name;
+    args.choiceGroup = choiceInput.name || '';
+    const choiceIndex = findChoiceInputIndex(choiceInput);
+    if (choiceIndex >= 0) args.choiceIndex = choiceIndex;
     args.checked = choiceInput.checked;
     args.clickKind = 'selectable';
   }
   return args;
+}
+
+function findChoiceInputIndex(choiceInput: HTMLInputElement): number {
+  const sameTypeInputs = Array.from(document.querySelectorAll(`input[type="${choiceInput.type}"]`)) as HTMLInputElement[];
+  const sameGroupInputs = choiceInput.name
+    ? sameTypeInputs.filter((candidate) => candidate.name === choiceInput.name)
+    : sameTypeInputs;
+  return sameGroupInputs.indexOf(choiceInput);
 }
 
 function visibleClickText(el: Element): string {
@@ -472,9 +479,19 @@ function fieldStepKey(step: RecordedStep): string | null {
   const selector = typeof step.args.selector === 'string' ? step.args.selector : '';
   if (step.tool === 'click' && ['radio', 'checkbox'].includes(String(step.args.inputType ?? ''))) {
     const value = typeof step.args.value === 'string' ? step.args.value : '';
-    const group = String(step.args.choiceGroup ?? step.args.name ?? '').trim();
-    const label = String(step.args.choiceLabel ?? step.args.label ?? '').trim();
-    return selector || group || label ? `${step.tool}:${group}:${selector}:${label}:${value}` : null;
+    const name = typeof (step.args as any).name === 'string'
+      ? (step.args as any).name
+      : typeof (step.args as any).choiceGroup === 'string'
+        ? (step.args as any).choiceGroup
+        : '';
+    const label = typeof step.args.label === 'string' ? step.args.label : '';
+    const choiceIndex = Number.isFinite(Number((step.args as any).choiceIndex))
+      ? String(Number((step.args as any).choiceIndex))
+      : '';
+    const text = typeof step.args.text === 'string' ? step.args.text : '';
+    return selector
+      ? `${step.tool}:${selector}:${value}:${name}:${label}:${choiceIndex}:${text}`
+      : null;
   }
   if (step.tool !== 'type_text' && step.tool !== 'select_option') return null;
   return selector ? `${step.tool}:${selector}` : null;
@@ -558,24 +575,6 @@ function labelFor(el: Element): string {
   }
 
   return compactRepeatedText(el.textContent?.trim() ?? '').slice(0, 80);
-}
-
-function groupLabelFor(el: Element): string {
-  const fieldset = el.closest('fieldset');
-  const legend = fieldset?.querySelector('legend')?.textContent?.trim();
-  if (legend) return compactRepeatedText(legend).slice(0, 120);
-
-  const group = el.closest('[role="radiogroup"],[role="group"],[aria-labelledby]');
-  const labelledBy = group?.getAttribute('aria-labelledby');
-  if (labelledBy) {
-    const label = labelledBy
-      .split(/\s+/)
-      .map((id) => document.getElementById(id)?.textContent?.trim() ?? '')
-      .filter(Boolean)
-      .join(' ');
-    if (label) return compactRepeatedText(label).slice(0, 120);
-  }
-  return '';
 }
 
 function compactRepeatedText(value: string): string {

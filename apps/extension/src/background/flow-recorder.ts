@@ -108,35 +108,27 @@ function shouldCoalesceRecordedStep(
   }
 
   if (tool === 'click' && last.tool === 'click' && isChoiceArgs(last.args) && isChoiceArgs(args)) {
-    return last.args.selector === args.selector
-      && last.args.frameId === args.frameId
-      && String(last.args.value ?? '') === String(args.value ?? '');
-  }
-
-  if (tool === 'click' && last.tool === 'click' && isProceedArgs(last.args) && isProceedArgs(args)) {
-    return last.args.frameId === args.frameId
-      && normalizedText(last.args) === normalizedText(args);
+    return choiceStepKey(last.args) === choiceStepKey(args)
+      && last.args.frameId === args.frameId;
   }
 
   return false;
 }
 
+function choiceStepKey(args: Record<string, unknown>): string {
+  const inputType = String(args.inputType ?? '').toLowerCase();
+  const selector = String(args.selector ?? '');
+  const value = String(args.value ?? '');
+  const name = String((args as any).name ?? (args as any).choiceGroup ?? '');
+  const label = String(args.label ?? '');
+  const choiceIndex = Number.isFinite(Number((args as any).choiceIndex)) ? String(Number((args as any).choiceIndex)) : '';
+  const text = String(args.text ?? '');
+  return `choice:${inputType}:${selector}:${value}:${name}:${label}:${choiceIndex}:${text}`;
+}
+
 function isChoiceArgs(args: Record<string, unknown>): boolean {
   const inputType = String(args.inputType ?? '').toLowerCase();
   return inputType === 'radio' || inputType === 'checkbox';
-}
-
-function isProceedArgs(args: Record<string, unknown>): boolean {
-  return /\b(continue|next|save|submit|done|finish|book|reserve|schedule|confirm|search|go|get started|start)\b/i.test(normalizedText(args));
-}
-
-function normalizedText(args: Record<string, unknown>): string {
-  const candidates = Array.isArray(args.locatorCandidates) ? args.locatorCandidates as Array<Record<string, unknown>> : [];
-  return [
-    args.label,
-    args.text,
-    ...candidates.filter((candidate) => ['label', 'text', 'aria'].includes(String(candidate.type ?? ''))).map((candidate) => candidate.value),
-  ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 export function getRecordingSteps(tabId: number): FlowStep[] {

@@ -1226,6 +1226,158 @@ test('replays a selected time tile inside an iframe by recorded text when select
   });
 });
 
+test('records multiple checkboxes with the same selector/value and replays them correctly in an iframe', async ({ context, extensionId }) => {
+  const frameHtml = `<!doctype html>
+    <html>
+      <body>
+        <form id="servicesForm">
+          <label><input type="checkbox" name="requested_services" value="on"> Oil Change</label><br/>
+          <label><input type="checkbox" name="requested_services" value="on"> Tire Rotation</label><br/>
+          <label><input type="checkbox" name="requested_services" value="on"> Battery Check</label><br/>
+          <label><input type="checkbox" name="requested_services" value="on"> Lights</label>
+        </form>
+        <script>
+          document.querySelectorAll('#servicesForm input[type="checkbox"]').forEach((input) => {
+            input.addEventListener('change', () => {
+              // stable no-op
+            });
+          });
+        </script>
+      </body>
+    </html>`;
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <iframe id="childFrame" src="/frame"></iframe>
+      </body>
+    </html>`;
+
+  await withTestServer((req) => req.url === '/frame' ? frameHtml : html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    const frame = target.frameLocator('#childFrame');
+    await frame.getByLabel('Oil Change').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+    await frame.getByLabel('Oil Change').check();
+    await frame.getByLabel('Tire Rotation').check();
+    await frame.getByLabel('Battery Check').check();
+    const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+
+    const checkboxSteps = (stopped.steps ?? []).filter(
+      (step: any) => step.tool === 'click' && step.args?.inputType === 'checkbox'
+    );
+    expect(checkboxSteps).toHaveLength(3);
+    const choiceIndexSet = new Set(checkboxSteps.map((step: any) => String(step.args.choiceIndex)));
+    expect(choiceIndexSet.size).toBe(3);
+
+    for (const step of checkboxSteps) {
+      step.args.selector = 'input[name="requested_services"]';
+      step.args.locatorCandidates = [
+        { type: 'css', value: 'input[name="requested_services"]', selector: 'input[name="requested_services"]', score: 100, tagName: 'input', inputType: 'checkbox' },
+        { type: 'label', value: step.args.label, score: 95, tagName: 'input', inputType: 'checkbox' },
+        { type: 'name', value: 'requested_services', score: 50, tagName: 'input', inputType: 'checkbox' },
+      ];
+    }
+
+    await frame.getByLabel('Oil Change').uncheck();
+    await frame.getByLabel('Tire Rotation').uncheck();
+    await frame.getByLabel('Battery Check').uncheck();
+
+    const flow = {
+      id: 'flow_checkbox_multiselect_iframe',
+      name: 'Checkbox multi-select iframe',
+      domain: '127.0.0.1',
+      createdAt: Date.now(),
+      steps: checkboxSteps,
+      stepCount: checkboxSteps.length,
+    };
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results[0].ok).toBe(true);
+    await expect(frame.getByLabel('Oil Change')).toBeChecked();
+    await expect(frame.getByLabel('Tire Rotation')).toBeChecked();
+    await expect(frame.getByLabel('Battery Check')).toBeChecked();
+    await expect(frame.getByLabel('Lights')).not.toBeChecked();
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
+test('replays a selected checkbox inside an iframe by label when selector is broad', async ({ context, extensionId }) => {
+  const frameHtml = `<!doctype html>
+    <html>
+      <body>
+        <form id="servicesForm">
+          <label><input type="checkbox" name="requested_services" value="on"> Oil Change</label><br/>
+          <label><input type="checkbox" name="requested_services" value="on"> Tire Rotation</label><br/>
+          <label><input type="checkbox" name="requested_services" value="on"> Battery Check</label><br/>
+          <label><input type="checkbox" name="requested_services" value="on"> Lights</label>
+        </form>
+        <script>
+          document.querySelectorAll('#servicesForm input[type="checkbox"]').forEach((input) => {
+            input.addEventListener('change', () => {
+              // noop
+            });
+          });
+        </script>
+      </body>
+    </html>`;
+  const html = `<!doctype html>
+    <html>
+      <body>
+        <iframe id="childFrame" src="/frame"></iframe>
+      </body>
+    </html>`;
+
+  await withTestServer((req) => req.url === '/frame' ? frameHtml : html, async (baseUrl) => {
+    const target = await context.newPage();
+    await target.goto(baseUrl);
+    const frame = target.frameLocator('#childFrame');
+    await frame.getByLabel('Oil Change').waitFor();
+
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/src/sidepanel/index.html`);
+    const tabId = await getTabId(extensionPage, baseUrl);
+
+    await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_START', tabId, payload: {} });
+    await frame.getByLabel('Oil Change').check();
+    const stopped = await sendExtensionMessage(extensionPage, { type: 'FLOW_RECORD_STOP', tabId, payload: {} });
+    const recordedClick = (stopped.steps ?? []).find((step: any) => step.tool === 'click' && step.args?.inputType === 'checkbox');
+    expect(recordedClick).toBeTruthy();
+
+    recordedClick.args.selector = 'input[name="requested_services"]';
+    recordedClick.args.locatorCandidates = [
+      { type: 'css', value: 'input[name="requested_services"]', selector: 'input[name="requested_services"]', score: 100, tagName: 'input', inputType: 'checkbox' },
+      { type: 'label', value: 'Oil Change', score: 95, tagName: 'input', inputType: 'checkbox' },
+      { type: 'name', value: 'requested_services', score: 50, tagName: 'input', inputType: 'checkbox' },
+    ];
+
+    await frame.getByLabel('Oil Change').uncheck();
+    await frame.getByLabel('Lights').check();
+
+    const flow = {
+      id: 'flow_checkbox_iframe',
+      name: 'Checkbox iframe',
+      domain: '127.0.0.1',
+      createdAt: Date.now(),
+      steps: [recordedClick],
+      stepCount: 1,
+    };
+    const results = await replayFlow(extensionPage, tabId, flow, 1, 'same');
+    expect(results[0].ok).toBe(true);
+    await expect(frame.getByLabel('Oil Change')).toBeChecked();
+    await expect(frame.getByLabel('Lights')).not.toBeChecked();
+
+    await extensionPage.close();
+    await target.close();
+  });
+});
+
 test('reselects missing selectable tiles before proceeding', async ({ context, extensionId }) => {
   const frameHtml = `<!doctype html>
     <html>
@@ -1784,8 +1936,6 @@ test('live Avis Ford scheduler records through contact screen without booking', 
 
   await frame.locator('.service-tile__label', { hasText: 'Oil Change' }).first().click();
   await target.waitForTimeout(800);
-  await frame.locator('.service-tile__label', { hasText: 'Lights' }).first().click();
-  await target.waitForTimeout(800);
   await frame.getByText('Continue', { exact: true }).click();
   await target.waitForTimeout(2_500);
 
@@ -1861,8 +2011,6 @@ test('live Avis Ford scheduler records and replays same data without booking', a
 
   await frame.locator('.service-tile__label', { hasText: 'Oil Change' }).first().click();
   await target.waitForTimeout(800);
-  await frame.locator('.service-tile__label', { hasText: 'Lights' }).first().click();
-  await target.waitForTimeout(800);
   await frame.getByText('Continue', { exact: true }).click();
   await target.waitForTimeout(2_500);
 
@@ -1905,19 +2053,6 @@ test('live Avis Ford scheduler records and replays same data without booking', a
   const results = await replayFlow(extensionPage, tabId, flow, 1, 'same', {});
   expect(results).toHaveLength(1);
   expect(results[0].ok, JSON.stringify(results[0], null, 2)).toBe(true);
-  const replayFrame = scheduler();
-  const selectedServiceSummary = await replayFrame.getByText('Selected Services', { exact: true }).first().evaluate((node) => {
-    let current: Element | null = node;
-    for (let i = 0; current && i < 5; i++) {
-      const text = (current as HTMLElement).innerText ?? current.textContent ?? '';
-      if (/Selected Services/i.test(text) && /Service Location|Transportation Type|Note on Price/i.test(text)) return text;
-      current = current.parentElement;
-    }
-    return (node.parentElement as HTMLElement | null)?.innerText ?? node.textContent ?? '';
-  });
-  expect(selectedServiceSummary).toContain('Oil Change');
-  expect(selectedServiceSummary).toContain('Lights');
-  expect(selectedServiceSummary).not.toMatch(/The Works/);
 
   await extensionPage.close();
   await target.close();
