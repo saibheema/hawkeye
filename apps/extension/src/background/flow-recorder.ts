@@ -113,12 +113,30 @@ function shouldCoalesceRecordedStep(
       && String(last.args.value ?? '') === String(args.value ?? '');
   }
 
+  if (tool === 'click' && last.tool === 'click' && isProceedArgs(last.args) && isProceedArgs(args)) {
+    return last.args.frameId === args.frameId
+      && normalizedText(last.args) === normalizedText(args);
+  }
+
   return false;
 }
 
 function isChoiceArgs(args: Record<string, unknown>): boolean {
   const inputType = String(args.inputType ?? '').toLowerCase();
   return inputType === 'radio' || inputType === 'checkbox';
+}
+
+function isProceedArgs(args: Record<string, unknown>): boolean {
+  return /\b(continue|next|save|submit|done|finish|book|reserve|schedule|confirm|search|go|get started|start)\b/i.test(normalizedText(args));
+}
+
+function normalizedText(args: Record<string, unknown>): string {
+  const candidates = Array.isArray(args.locatorCandidates) ? args.locatorCandidates as Array<Record<string, unknown>> : [];
+  return [
+    args.label,
+    args.text,
+    ...candidates.filter((candidate) => ['label', 'text', 'aria'].includes(String(candidate.type ?? ''))).map((candidate) => candidate.value),
+  ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 export function getRecordingSteps(tabId: number): FlowStep[] {

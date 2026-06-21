@@ -412,6 +412,11 @@ function clickStateArgs(el: Element): Record<string, unknown> {
   }
   if (choiceInput && ['radio', 'checkbox'].includes(choiceInput.type)) {
     args.inputType = choiceInput.type;
+    args.choiceLabel = label;
+    args.choiceGroup = choiceInput.name || groupLabelFor(choiceInput);
+    args.forId = choiceInput.id || args.forId;
+    args.name = choiceInput.name;
+    args.inputId = choiceInput.id;
     args.value = choiceInput.value;
     args.checked = choiceInput.checked;
     args.clickKind = 'selectable';
@@ -467,7 +472,9 @@ function fieldStepKey(step: RecordedStep): string | null {
   const selector = typeof step.args.selector === 'string' ? step.args.selector : '';
   if (step.tool === 'click' && ['radio', 'checkbox'].includes(String(step.args.inputType ?? ''))) {
     const value = typeof step.args.value === 'string' ? step.args.value : '';
-    return selector ? `${step.tool}:${selector}:${value}` : null;
+    const group = String(step.args.choiceGroup ?? step.args.name ?? '').trim();
+    const label = String(step.args.choiceLabel ?? step.args.label ?? '').trim();
+    return selector || group || label ? `${step.tool}:${group}:${selector}:${label}:${value}` : null;
   }
   if (step.tool !== 'type_text' && step.tool !== 'select_option') return null;
   return selector ? `${step.tool}:${selector}` : null;
@@ -551,6 +558,24 @@ function labelFor(el: Element): string {
   }
 
   return compactRepeatedText(el.textContent?.trim() ?? '').slice(0, 80);
+}
+
+function groupLabelFor(el: Element): string {
+  const fieldset = el.closest('fieldset');
+  const legend = fieldset?.querySelector('legend')?.textContent?.trim();
+  if (legend) return compactRepeatedText(legend).slice(0, 120);
+
+  const group = el.closest('[role="radiogroup"],[role="group"],[aria-labelledby]');
+  const labelledBy = group?.getAttribute('aria-labelledby');
+  if (labelledBy) {
+    const label = labelledBy
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent?.trim() ?? '')
+      .filter(Boolean)
+      .join(' ');
+    if (label) return compactRepeatedText(label).slice(0, 120);
+  }
+  return '';
 }
 
 function compactRepeatedText(value: string): string {
